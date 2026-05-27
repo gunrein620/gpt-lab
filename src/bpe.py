@@ -31,7 +31,7 @@ class BPETokenizer:
     - 260 이상: BPE merge로 생성한 토큰
     """
 
-    def __init__(self, vocab_size: int = 300):
+    def __init__(self, vocab_size: int = 3000):
         self.vocab_size = vocab_size
         self.id_to_token = {}
         self.token_to_id = {}
@@ -78,7 +78,7 @@ class BPETokenizer:
         - `self.merges`, `self.id_to_token`, `self.token_to_id`를 갱신합니다.
         """
         self._init_special_tokens()
-        
+
         # [1]
         token_ids = [b + BYTE_OFFSET for b in corpus.encode("utf-8")]
         
@@ -132,7 +132,26 @@ class BPETokenizer:
         - train/load에서 얻은 merge rule을 학습 순서대로 적용합니다.
         - add_bos_eos=True이면 앞뒤에 bos/eos ID를 붙입니다.
         """
-        raise NotImplementedError("BPETokenizer.encode를 구현하세요.")
+        # [1]
+        token_ids = [b + BYTE_OFFSET for b in text.encode("utf-8")]
+
+        # [2]
+        for best_pair in self.merges:
+            new_token_ids = []
+            i = 0
+            while i < len(token_ids):
+                if i < len(token_ids) - 1 and (token_ids[i], token_ids[i+1]) == best_pair:
+                    new_token_ids.append(self.token_to_id[best_pair])
+                    i += 2
+                else:
+                    new_token_ids.append(token_ids[i])
+                    i += 1
+            token_ids = new_token_ids
+
+        # [3]
+        if add_bos_eos:
+            return [self.get_bos_id()] + token_ids + [self.get_eos_id()]
+        return token_ids
 
     def decode(self, ids: list[int], skip_special: bool = True) -> str:
         """
@@ -142,4 +161,19 @@ class BPETokenizer:
         - merge token은 원본 byte token까지 재귀적으로 펼칩니다.
         - byte를 하나씩 decode하지 말고, 마지막에 `bytes(...).decode("utf-8")`를 한 번만 호출합니다.
         """
-        raise NotImplementedError("BPETokenizer.decode를 구현하세요.")
+        byte_tokens = []
+
+        for id in ids:
+            if skip_special and id in (self.get_pad_id(), self.get_unk_id(), self.get_bos_id(), self.get_eos_id()):
+                continue
+            byte_tokens.append(self.expand(id))
+
+        return b"".join(byte_tokens).decode("utf-8")
+        
+    def expand(self, id):
+        token = self.id_to_token[id]
+        if isinstance(token, bytes):
+            return token
+        else:
+            left, right = token
+            return self.expand(left) + self.expand(right)
