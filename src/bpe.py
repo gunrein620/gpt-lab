@@ -9,6 +9,7 @@ UTF-8 byte-level BPE 토크나이저 과제 템플릿.
 
 from pathlib import Path
 from collections import Counter
+import json
 
 PAD_TOKEN = "<pad>"  # padding: 문장 길이 맞출 때 빈자리 채우기
 UNK_TOKEN = "<unk>"  # unknown: 어휘사전에 없는 토큰
@@ -115,13 +116,51 @@ class BPETokenizer:
 
         bytes와 tuple은 JSON에 바로 저장할 수 없으므로 type 정보를 함께 저장하세요.
         """
-        raise NotImplementedError("BPETokenizer.save를 구현하세요.")
+        data = {
+            "vocab_size": self.vocab_size,
+            "id_to_token": {},
+            "merges": []
+        }
+
+        for key, value in self.id_to_token.items():
+            if isinstance(value, bytes):
+                data["id_to_token"][key] = {"type": "bytes", "data": list(value)}
+            elif isinstance(value, tuple):
+                data["id_to_token"][key] = {"type": "tuple", "data": list(value)}
+            else:
+                data["id_to_token"][key] = value
+        
+        for pair in self.merges:
+            data["merges"].append(list(pair))
+
+        with open(path, "w") as f:
+            json.dump(data, f)
 
     def load(self, path: str | Path):
         """
         TODO: save()로 저장한 JSON 파일을 읽어 vocabulary와 merge rule을 복원합니다.
         """
-        raise NotImplementedError("BPETokenizer.load를 구현하세요.")
+        with open(path, "r") as f:
+            data = json.load(f)
+        
+        self.vocab_size = data["vocab_size"]
+        
+        for key, value in data["id_to_token"].items():
+            if isinstance(value, dict):
+                raw = value["data"]
+                if value["type"] == "bytes":
+                    self.id_to_token[int(key)] = bytes(raw)
+                    self.token_to_id[bytes(raw)] = int(key)
+                elif value["type"] == "tuple":
+                    self.id_to_token[int(key)] = tuple(raw)
+                    self.token_to_id[tuple(raw)] = int(key)
+            else:
+                self.id_to_token[int(key)] = value
+                self.token_to_id[value] = int(key)
+    
+        for pair in data["merges"]:
+            self.merges.append(tuple(pair))
+
 
     def encode(self, text: str, add_bos_eos: bool = False) -> list[int]:
         """
