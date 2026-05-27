@@ -8,6 +8,7 @@ UTF-8 byte-level BPE 토크나이저 과제 템플릿.
 """
 
 from pathlib import Path
+from collections import Counter
 
 PAD_TOKEN = "<pad>"  # padding: 문장 길이 맞출 때 빈자리 채우기
 UNK_TOKEN = "<unk>"  # unknown: 어휘사전에 없는 토큰
@@ -76,7 +77,37 @@ class BPETokenizer:
         - 새 token ID를 만들고, 시퀀스의 해당 pair를 새 ID로 치환합니다.
         - `self.merges`, `self.id_to_token`, `self.token_to_id`를 갱신합니다.
         """
-        raise NotImplementedError("BPETokenizer.train을 구현하세요.")
+        self._init_special_tokens()
+        
+        # [1]
+        token_ids = [b + BYTE_OFFSET for b in corpus.encode("utf-8")]
+        
+        while len(self.id_to_token) < self.vocab_size: # [종료조건 1] 목표한 vocab_size에 도달했을 때
+            # [2] pair counting & find best pair
+            pairs = list(zip(token_ids, token_ids[1:]))
+            pair_counts = Counter(pairs)
+            best_pair = max(pair_counts, key=lambda x: pair_counts[x])
+
+            if max(pair_counts.values()) < 2: # [종료조건 2] 더 이상 쌍이 없을 때
+                break
+
+            # [3] merge
+            new_id = len(self.id_to_token)
+            new_token_ids = []
+            i = 0
+            while i < len(token_ids):
+                if i < len(token_ids) - 1 and (token_ids[i], token_ids[i+1]) == best_pair:
+                    new_token_ids.append(new_id)
+                    i += 2
+                else:
+                    new_token_ids.append(token_ids[i])
+                    i += 1
+            token_ids = new_token_ids
+        
+            # [4]
+            self.id_to_token[new_id] = best_pair
+            self.token_to_id[best_pair] = new_id
+            self.merges.append(best_pair)
 
     def save(self, path: str | Path):
         """
