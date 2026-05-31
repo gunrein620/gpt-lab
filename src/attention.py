@@ -27,11 +27,14 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         if d_model % n_heads != 0:
             raise ValueError("d_model must be divisible by n_heads")
-        self.d_model = d_model
+        self.d_model = d_model # emb_dim = d_model = 각 토큰을 표현하는 벡터 크기
         self.n_heads = n_heads
         self.head_dim = d_model // n_heads
         # TODO: qkv projection, output projection, dropout을 정의하세요.
-        raise NotImplementedError("MultiHeadAttention.__init__을 구현하세요.")
+        self.W_qkv = nn.Linear(self.d_model, 3 * self.d_model, bias=qkv_bias)
+        self.output_projection = nn.Linear(self.d_model, self.d_model)
+        self.dropout = nn.Dropout(drop_rate)
+        
 
     def forward(
         self,
