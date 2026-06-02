@@ -8,6 +8,8 @@ UTF-8 byte-level BPE 토크나이저 과제 템플릿.
 """
 
 from pathlib import Path
+import json
+from collections import Counter
 
 
 PAD_TOKEN = "<pad>"
@@ -43,7 +45,19 @@ class BPETokenizer:
         1. 특수 토큰 4개를 고정 ID 0~3에 등록합니다.
         2. byte 0~255를 ID 4~259에 bytes([byte_value]) 형태로 등록합니다.
         """
-        raise NotImplementedError("_init_special_tokens를 구현하세요.")
+        self.id_to_token = {}
+        self.token_to_id = {}
+        self.merges = []
+
+        for token, idx in SPECIAL_IDS.items():
+            self.id_to_token[idx] = token
+            self.token_to_id[token] = idx
+
+        for byte_value in range(NUM_BYTES):
+            token_id = BYTE_OFFSET + byte_value
+            token = bytes([byte_value])
+            self.id_to_token[token_id] = token
+            self.token_to_id[token] = token_id
 
     def get_pad_id(self):
         """padding 토큰 ID."""
@@ -71,7 +85,32 @@ class BPETokenizer:
         - 새 token ID를 만들고, 시퀀스의 해당 pair를 새 ID로 치환합니다.
         - `self.merges`, `self.id_to_token`, `self.token_to_id`를 갱신합니다.
         """
-        raise NotImplementedError("BPETokenizer.train을 구현하세요.")
+        self._init_special_tokens()
+        ids = [BYTE_OFFSET + byte_value for byte_value in corpus.encode("utf-8")]
+
+        while len(self.id_to_token) < self.vocab_size and len(ids) >= 2:
+            pair_counts = Counter(zip(ids, ids[1:]))
+            if not pair_counts:
+                break
+            best_pair, count = pair_counts.most_common(1)[0]
+            if count < 2:
+                break
+
+            new_id = len(self.id_to_token)
+            self.merges.append(best_pair)
+            self.id_to_token[new_id] = best_pair
+            self.token_to_id[best_pair] = new_id
+
+            merged = []
+            i = 0
+            while i < len(ids):
+                if i < len(ids) - 1 and (ids[i], ids[i + 1]) == best_pair:
+                    merged.append(new_id)
+                    i += 2
+                else:
+                    merged.append(ids[i])
+                    i += 1
+            ids = merged
 
     def save(self, path: str | Path):
         """
@@ -79,13 +118,48 @@ class BPETokenizer:
 
         bytes와 tuple은 JSON에 바로 저장할 수 없으므로 type 정보를 함께 저장하세요.
         """
-        raise NotImplementedError("BPETokenizer.save를 구현하세요.")
+        path = Path(path)
+
+        def serialize_token(token):
+            if isinstance(token, bytes):
+                return {"type": "bytes", "value": list(token)}
+            if isinstance(token, tuple):
+                return {"type": "tuple", "value": list(token)}
+            return {"type": "str", "value": token}
+
+        payload = {
+            "vocab_size": self.vocab_size,
+            "id_to_token": [
+                {"id": token_id, "token": serialize_token(token)}
+                for token_id, token in sorted(self.id_to_token.items())
+            ],
+            "merges": [list(pair) for pair in self.merges],
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def load(self, path: str | Path):
         """
         TODO: save()로 저장한 JSON 파일을 읽어 vocabulary와 merge rule을 복원합니다.
         """
-        raise NotImplementedError("BPETokenizer.load를 구현하세요.")
+        path = Path(path)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self.vocab_size = payload.get("vocab_size", self.vocab_size)
+        self.id_to_token = {}
+        self.token_to_id = {}
+        self.merges = [tuple(pair) for pair in payload["merges"]]
+
+        def deserialize_token(data):
+            if data["type"] == "bytes":
+                return bytes(data["value"])
+            if data["type"] == "tuple":
+                return tuple(data["value"])
+            return data["value"]
+
+        for item in payload["id_to_token"]:
+            token_id = int(item["id"])
+            token = deserialize_token(item["token"])
+            self.id_to_token[token_id] = token
+            self.token_to_id[token] = token_id
 
     def encode(self, text: str, add_bos_eos: bool = False) -> list[int]:
         """
@@ -96,7 +170,28 @@ class BPETokenizer:
         - train/load에서 얻은 merge rule을 학습 순서대로 적용합니다.
         - add_bos_eos=True이면 앞뒤에 bos/eos ID를 붙입니다.
         """
-        raise NotImplementedError("BPETokenizer.encode를 구현하세요.")
+        if not self.id_to_token:
+            self._init_special_tokens()
+
+        ids = [BYTE_OFFSET + byte_value for byte_value in text.encode("utf-8")]
+        for pair in self.merges:
+            new_id = self.token_to_id.get(pair)
+            if new_id is None:
+                continue
+            merged = []
+            i = 0
+            while i < len(ids):
+                if i < len(ids) - 1 and (ids[i], ids[i + 1]) == pair:
+                    merged.append(new_id)
+                    i += 2
+                else:
+                    merged.append(ids[i])
+                    i += 1
+            ids = merged
+
+        if add_bos_eos:
+            return [self.get_bos_id(), *ids, self.get_eos_id()]
+        return ids
 
     def decode(self, ids: list[int], skip_special: bool = True) -> str:
         """
@@ -106,4 +201,21 @@ class BPETokenizer:
         - merge token은 원본 byte token까지 재귀적으로 펼칩니다.
         - byte를 하나씩 decode하지 말고, 마지막에 `bytes(...).decode("utf-8")`를 한 번만 호출합니다.
         """
-        raise NotImplementedError("BPETokenizer.decode를 구현하세요.")
+        byte_values = []
+
+        def expand(token_id: int) -> None:
+            token = self.id_to_token.get(token_id)
+            if isinstance(token, bytes):
+                byte_values.extend(token)
+            elif isinstance(token, tuple):
+                for child_id in token:
+                    expand(child_id)
+            elif token in SPECIAL_TOKENS:
+                if not skip_special:
+                    byte_values.extend(token.encode("utf-8"))
+            elif token is not None:
+                byte_values.extend(str(token).encode("utf-8"))
+
+        for token_id in ids:
+            expand(token_id)
+        return bytes(byte_values).decode("utf-8", errors="replace")
