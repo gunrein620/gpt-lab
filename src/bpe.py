@@ -49,7 +49,8 @@ class BPETokenizer:
         self.token_to_id = {}
         self.merges = []
 
-        for token, idx in SPECIAL_IDS.items():
+        for token in SPECIAL_TOKENS:
+            idx = SPECIAL_IDS[token]
             self.id_to_token[idx] = token
             self.token_to_id[token] = idx
 
@@ -96,7 +97,7 @@ class BPETokenizer:
             if count < 2:
                 break
 
-            new_id = len(self.id_to_token)
+            new_id = BYTE_OFFSET + NUM_BYTES + len(self.merges)
             self.merges.append(best_pair)
             self.id_to_token[new_id] = best_pair
             self.token_to_id[best_pair] = new_id
