@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 """NSMC 감성 분류 미세 조정 과제 템플릿."""
 
+from __future__ import annotations
+
+import csv
+import json
+import random
+import re
 from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 try:
@@ -21,12 +28,35 @@ def make_sentiment_dataset(
     output_dir: str | Path | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """
-    TODO: NSMC TSV를 읽어 train/validation/test 감성 분류 데이터를 만듭니다.
+    NSMC TSV를 읽어 train/validation/test 감성 분류 데이터를 만듭니다.
 
     반환 형식:
         [{"text": "리뷰", "label": 0 또는 1}, ...]
     """
-    raise NotImplementedError("make_sentiment_dataset을 구현하세요.")
+    train_rows = _read_nsmc_tsv(train_tsv_path)
+    test_rows = _read_nsmc_tsv(test_tsv_path) if test_tsv_path is not None else []
+
+    rng = random.Random(seed)
+    rng.shuffle(train_rows)
+
+    if train_rows and val_ratio > 0:
+        val_size = max(1, int(len(train_rows) * val_ratio))
+    else:
+        val_size = 0
+    val_size = min(val_size, len(train_rows))
+
+    val_data = train_rows[:val_size]
+    train_data = train_rows[val_size:]
+    test_data = test_rows
+
+    if output_dir is not None:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        _write_jsonl(output_path / "nsmc_sentiment_train.jsonl", train_data)
+        _write_jsonl(output_path / "nsmc_sentiment_val.jsonl", val_data)
+        _write_jsonl(output_path / "nsmc_sentiment_test.jsonl", test_data)
+
+    return train_data, val_data, test_data
 
 
 class ReviewSentimentDataset(Dataset):
@@ -48,8 +78,13 @@ class ReviewSentimentDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
-        """TODO: text를 encode하고 max_length까지 자르거나 padding한 뒤 label과 함께 반환합니다."""
-        raise NotImplementedError("ReviewSentimentDataset.__getitem__을 구현하세요.")
+        """text를 encode하고 max_length까지 자르거나 padding한 뒤 label과 함께 반환합니다."""
+        row = self.data[idx]
+        ids = self.tokenizer.encode(row["text"], add_bos_eos=True)
+        ids = ids[: self.max_length]
+        if len(ids) < self.max_length:
+            ids = ids + [self.pad_id] * (self.max_length - len(ids))
+        return torch.tensor(ids, dtype=torch.long), int(row["label"])
 
 
 class GPTForSequenceClassification(nn.Module):
@@ -68,8 +103,8 @@ class GPTForSequenceClassification(nn.Module):
         super().__init__()
         self.gpt = gpt_model
         self.num_labels = num_labels
-        # TODO: dropout과 classifier를 정의하세요. classifier 입력 차원은 gpt_model.config["emb_dim"]입니다.
-        raise NotImplementedError("GPTForSequenceClassification.__init__을 구현하세요.")
+        self.dropout = nn.Dropout(drop_rate)
+        self.classifier = nn.Linear(gpt_model.config["emb_dim"], num_labels)
 
     def forward(
         self,
@@ -77,11 +112,30 @@ class GPTForSequenceClassification(nn.Module):
         labels: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """
-        TODO: GPT hidden state에서 문장 대표 벡터를 뽑아 분류 logits를 만듭니다.
+        GPT hidden state에서 문장 대표 벡터를 뽑아 분류 logits를 만듭니다.
 
         labels가 있으면 (loss, logits), 없으면 logits를 반환합니다.
         """
-        raise NotImplementedError("GPTForSequenceClassification.forward를 구현하세요.")
+        if hasattr(self.gpt, "forward_hidden"):
+            hidden = self.gpt.forward_hidden(input_ids)
+        else:
+            hidden = self.gpt.embedding(input_ids)
+            for block in self.gpt.blocks:
+                hidden = block(hidden, causal_mask=True)
+            hidden = self.gpt.final_norm(hidden)
+
+        non_pad = input_ids.ne(0)
+        last_indices = non_pad.long().sum(dim=1).clamp(min=1) - 1
+        batch_indices = torch.arange(input_ids.size(0), device=input_ids.device)
+        pooled = hidden[batch_indices, last_indices]
+        logits = self.classifier(self.dropout(pooled))
+
+        if labels is None:
+            return logits
+
+        labels = labels.to(logits.device)
+        loss = F.cross_entropy(logits, labels)
+        return loss, logits
 
 
 def train_epoch_sentiment(
@@ -90,8 +144,25 @@ def train_epoch_sentiment(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
 ) -> tuple[float, float]:
-    """TODO: 감성 분류 모델을 1 epoch 훈련하고 (평균 loss, accuracy)를 반환합니다."""
-    raise NotImplementedError("train_epoch_sentiment를 구현하세요.")
+    """감성 분류 모델을 1 epoch 훈련하고 (평균 loss, accuracy)를 반환합니다."""
+    model.train()
+    total_loss = 0.0
+    total_correct = 0
+    total_count = 0
+
+    for input_ids, labels in train_loader:
+        input_ids = input_ids.to(device)
+        labels = labels.to(device)
+        optimizer.zero_grad(set_to_none=True)
+        loss, logits = model(input_ids, labels=labels)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item() * labels.size(0)
+        total_correct += (logits.argmax(dim=-1) == labels).sum().item()
+        total_count += labels.size(0)
+
+    return total_loss / max(1, total_count), total_correct / max(1, total_count)
 
 
 def evaluate_sentiment(
@@ -99,5 +170,44 @@ def evaluate_sentiment(
     data_loader,
     device: torch.device,
 ) -> tuple[float, float]:
-    """TODO: 감성 분류 모델을 평가하고 (평균 loss, accuracy)를 반환합니다."""
-    raise NotImplementedError("evaluate_sentiment를 구현하세요.")
+    """감성 분류 모델을 평가하고 (평균 loss, accuracy)를 반환합니다."""
+    model.eval()
+    total_loss = 0.0
+    total_correct = 0
+    total_count = 0
+
+    with torch.no_grad():
+        for input_ids, labels in data_loader:
+            input_ids = input_ids.to(device)
+            labels = labels.to(device)
+            loss, logits = model(input_ids, labels=labels)
+            total_loss += loss.item() * labels.size(0)
+            total_correct += (logits.argmax(dim=-1) == labels).sum().item()
+            total_count += labels.size(0)
+
+    return total_loss / max(1, total_count), total_correct / max(1, total_count)
+
+
+def _clean_text(text: str | None) -> str:
+    if text is None:
+        return ""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _read_nsmc_tsv(path: str | Path) -> list[dict]:
+    rows: list[dict] = []
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            text = _clean_text(row.get("document"))
+            label = row.get("label")
+            if not text or label not in {"0", "1"}:
+                continue
+            rows.append({"text": text, "label": int(label)})
+    return rows
+
+
+def _write_jsonl(path: str | Path, rows: list[dict]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
