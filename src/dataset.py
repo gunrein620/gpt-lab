@@ -24,6 +24,7 @@ class GPTDataset(Dataset):
         self.context_length = context_length
         self.stride = stride if stride is not None else context_length
         # TODO: 만들 수 있는 학습 샘플 개수를 self._length에 저장하세요.
+        # input 길이만큼 자른 뒤 target은 한 칸 뒤를 봐야 하므로 토큰 1개가 더 필요합니다.
         self._length = max(0, (len(token_ids) - context_length - 1) // self.stride + 1)
 
     def __len__(self) -> int:
@@ -40,6 +41,7 @@ class GPTDataset(Dataset):
         """
         if idx < 0 or idx >= self._length:
             raise IndexError(idx)
+        # GPT 사전학습은 같은 구간을 한 칸 밀어 input/target 쌍으로 만듭니다.
         start = idx * self.stride
         end = start + self.context_length
         input_ids = torch.tensor(self.token_ids[start:end], dtype=torch.long)

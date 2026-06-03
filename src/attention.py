@@ -58,16 +58,20 @@ class MultiHeadAttention(nn.Module):
             tensor = tensor.view(batch_size, seq_len, self.n_heads, self.head_dim)
             return tensor.transpose(1, 2)
 
+        # 같은 입력 벡터를 Q(찾는 정보), K(매칭 표지), V(가져올 내용) 역할로 나눕니다.
         q = split_heads(self.q_proj(x))
         k = split_heads(self.k_proj(x))
         v = split_heads(self.v_proj(x))
 
+        # Q와 K의 유사도를 점수화하면 각 토큰이 다른 토큰을 얼마나 참고할지 알 수 있습니다.
         scores = q @ k.transpose(-2, -1)
         scores = scores / (self.head_dim**0.5)
         if causal_mask:
+            # GPT는 다음 토큰 예측 모델이므로 현재 위치보다 미래 토큰은 볼 수 없게 막습니다.
             mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device, dtype=torch.bool), diagonal=1)
             scores = scores.masked_fill(mask, float("-inf"))
 
+        # softmax로 참고 비율을 만든 뒤, 그 비율만큼 V를 섞어 문맥 벡터를 만듭니다.
         attn_weights = F.softmax(scores, dim=-1)
         attn_weights = self.dropout(attn_weights)
         context = attn_weights @ v

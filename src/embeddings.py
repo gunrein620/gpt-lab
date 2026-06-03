@@ -44,6 +44,7 @@ class InputEmbedding(nn.Module):
         batch_size, seq_len = x.shape
         if seq_len > self.context_length:
             raise ValueError("seq_len must not exceed context_length")
+        # 토큰 의미 벡터에 위치 벡터를 더해 Transformer가 순서 정보를 볼 수 있게 합니다.
         positions = torch.arange(seq_len, device=x.device)
         tok_emb = self.token_embedding(x)
         pos_emb = self.position_embedding(positions).unsqueeze(0)

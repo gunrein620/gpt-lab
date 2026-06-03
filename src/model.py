@@ -25,6 +25,7 @@ class LayerNorm(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """TODO: 마지막 차원의 평균과 분산으로 정규화한 뒤 gamma/beta를 적용합니다."""
+        # 각 토큰 벡터의 마지막 차원을 정규화해 깊은 block에서도 값 범위를 안정화합니다.
         mean = x.mean(dim=-1, keepdim=True)
         var = x.var(dim=-1, keepdim=True, unbiased=False)
         x_norm = (x - mean) / torch.sqrt(var + self.eps)
@@ -45,6 +46,7 @@ class FeedForward(nn.Module):
     def __init__(self, d_model: int, dropout: float = 0.1, mult: int = 4):
         super().__init__()
         # TODO: d_model -> mult*d_model -> d_model 구조의 작은 MLP를 정의하세요.
+        # Transformer FFN은 각 토큰 위치별로 차원을 확장했다가 다시 원래 차원으로 줄입니다.
         self.net = nn.Sequential(
             nn.Linear(d_model, mult * d_model),
             GELU(),
@@ -79,6 +81,7 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, causal_mask: bool = True) -> torch.Tensor:
         """TODO: attention과 ffn을 residual connection으로 연결합니다."""
+        # residual connection은 attention/FFN 결과를 원래 입력에 더해 정보와 gradient 흐름을 보존합니다.
         x = x + self.attn(self.ln1(x), causal_mask=causal_mask)
         x = x + self.ffn(self.ln2(x))
         return x
@@ -123,6 +126,7 @@ class GPTModel(nn.Module):
             targets가 None이면 logits
             targets가 있으면 (loss, logits)
         """
+        # token id를 임베딩으로 바꾼 뒤 여러 TransformerBlock을 지나 다음 토큰 점수를 만듭니다.
         x = self.embedding(idx)
         for block in self.blocks:
             x = block(x, causal_mask=True)
@@ -130,6 +134,7 @@ class GPTModel(nn.Module):
         logits = self.lm_head(x)
         if targets is None:
             return logits
+        # 모든 위치의 다음 토큰 예측을 하나로 펼쳐 cross entropy loss를 계산합니다.
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         return loss, logits
 
@@ -144,6 +149,7 @@ def generate_text_simple(
     model.eval()
     with torch.no_grad():
         for _ in range(max_new_tokens):
+            # context window 안의 마지막 위치 logits에서 가장 높은 토큰을 greedily 선택합니다.
             idx_cond = idx[:, -context_size:]
             logits = model(idx_cond)
             logits = logits[:, -1, :]

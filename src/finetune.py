@@ -2,13 +2,9 @@
 """NSMC 감성 분류 미세 조정 과제 템플릿."""
 
 from pathlib import Path
-import csv
-import json
-import random
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 try:
@@ -30,41 +26,7 @@ def make_sentiment_dataset(
     반환 형식:
         [{"text": "리뷰", "label": 0 또는 1}, ...]
     """
-    def read_nsmc(path: str | Path) -> list[dict]:
-        rows = []
-        with Path(path).open("r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f, delimiter="\t")
-            for row in reader:
-                text = (row.get("document") or "").strip()
-                label = row.get("label")
-                if not text or label is None:
-                    continue
-                rows.append({"text": text, "label": int(label)})
-        return rows
-
-    train_rows = read_nsmc(train_tsv_path)
-    rng = random.Random(seed)
-    rng.shuffle(train_rows)
-    val_size = int(len(train_rows) * val_ratio)
-    if val_ratio > 0 and len(train_rows) > 1:
-        val_size = max(1, val_size)
-    val_data = train_rows[:val_size]
-    train_data = train_rows[val_size:]
-    test_data = read_nsmc(test_tsv_path) if test_tsv_path is not None else []
-
-    if output_dir is not None:
-        out_dir = Path(output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        for name, data in [
-            ("nsmc_sentiment_train.jsonl", train_data),
-            ("nsmc_sentiment_val.jsonl", val_data),
-            ("nsmc_sentiment_test.jsonl", test_data),
-        ]:
-            with (out_dir / name).open("w", encoding="utf-8") as f:
-                for item in data:
-                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
-
-    return train_data, val_data, test_data
+    raise NotImplementedError("make_sentiment_dataset을 구현하세요.")
 
 
 class ReviewSentimentDataset(Dataset):
@@ -87,12 +49,7 @@ class ReviewSentimentDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
         """TODO: text를 encode하고 max_length까지 자르거나 padding한 뒤 label과 함께 반환합니다."""
-        item = self.data[idx]
-        ids = self.tokenizer.encode(item["text"], add_bos_eos=True)
-        ids = ids[: self.max_length]
-        if len(ids) < self.max_length:
-            ids = ids + [self.pad_id] * (self.max_length - len(ids))
-        return torch.tensor(ids, dtype=torch.long), int(item["label"])
+        raise NotImplementedError("ReviewSentimentDataset.__getitem__을 구현하세요.")
 
 
 class GPTForSequenceClassification(nn.Module):
@@ -112,8 +69,7 @@ class GPTForSequenceClassification(nn.Module):
         self.gpt = gpt_model
         self.num_labels = num_labels
         # TODO: dropout과 classifier를 정의하세요. classifier 입력 차원은 gpt_model.config["emb_dim"]입니다.
-        self.dropout = nn.Dropout(drop_rate)
-        self.classifier = nn.Linear(gpt_model.config["emb_dim"], num_labels)
+        raise NotImplementedError("GPTForSequenceClassification.__init__을 구현하세요.")
 
     def forward(
         self,
@@ -125,16 +81,7 @@ class GPTForSequenceClassification(nn.Module):
 
         labels가 있으면 (loss, logits), 없으면 logits를 반환합니다.
         """
-        x = self.gpt.embedding(input_ids)
-        for block in self.gpt.blocks:
-            x = block(x, causal_mask=True)
-        hidden = self.gpt.final_norm(x)
-        pooled = hidden[:, -1, :]
-        logits = self.classifier(self.dropout(pooled))
-        if labels is None:
-            return logits
-        loss = F.cross_entropy(logits, labels)
-        return loss, logits
+        raise NotImplementedError("GPTForSequenceClassification.forward를 구현하세요.")
 
 
 def train_epoch_sentiment(
@@ -144,22 +91,7 @@ def train_epoch_sentiment(
     device: torch.device,
 ) -> tuple[float, float]:
     """TODO: 감성 분류 모델을 1 epoch 훈련하고 (평균 loss, accuracy)를 반환합니다."""
-    model.train()
-    total_loss = 0.0
-    correct = 0
-    total = 0
-    for input_ids, labels in train_loader:
-        input_ids = input_ids.to(device)
-        labels = labels.to(device)
-        optimizer.zero_grad()
-        loss, logits = model(input_ids, labels=labels)
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item() * input_ids.size(0)
-        correct += (logits.argmax(dim=-1) == labels).sum().item()
-        total += input_ids.size(0)
-    return total_loss / total if total else 0.0, correct / total if total else 0.0
+    raise NotImplementedError("train_epoch_sentiment를 구현하세요.")
 
 
 def evaluate_sentiment(
@@ -168,16 +100,4 @@ def evaluate_sentiment(
     device: torch.device,
 ) -> tuple[float, float]:
     """TODO: 감성 분류 모델을 평가하고 (평균 loss, accuracy)를 반환합니다."""
-    model.eval()
-    total_loss = 0.0
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        for input_ids, labels in data_loader:
-            input_ids = input_ids.to(device)
-            labels = labels.to(device)
-            loss, logits = model(input_ids, labels=labels)
-            total_loss += loss.item() * input_ids.size(0)
-            correct += (logits.argmax(dim=-1) == labels).sum().item()
-            total += input_ids.size(0)
-    return total_loss / total if total else 0.0, correct / total if total else 0.0
+    raise NotImplementedError("evaluate_sentiment를 구현하세요.")

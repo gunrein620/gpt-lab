@@ -45,6 +45,7 @@ class BPETokenizer:
         1. 특수 토큰 4개를 고정 ID 0~3에 등록합니다.
         2. byte 0~255를 ID 4~259에 bytes([byte_value]) 형태로 등록합니다.
         """
+        # 매번 초기 상태를 고정해서 special token과 byte token ID 배치를 보장합니다.
         self.id_to_token = {}
         self.token_to_id = {}
         self.merges = []
@@ -87,9 +88,11 @@ class BPETokenizer:
         - `self.merges`, `self.id_to_token`, `self.token_to_id`를 갱신합니다.
         """
         self._init_special_tokens()
+        # 문자열을 먼저 UTF-8 byte ID로 바꾼 뒤, 자주 붙는 인접 pair를 새 토큰으로 합칩니다.
         ids = [BYTE_OFFSET + byte_value for byte_value in corpus.encode("utf-8")]
 
         while len(self.id_to_token) < self.vocab_size and len(ids) >= 2:
+            # 현재 시퀀스에서 가장 자주 등장한 이웃 토큰 쌍이 다음 merge 대상입니다.
             pair_counts = Counter(zip(ids, ids[1:]))
             if not pair_counts:
                 break
@@ -102,6 +105,7 @@ class BPETokenizer:
             self.id_to_token[new_id] = best_pair
             self.token_to_id[best_pair] = new_id
 
+            # 선택된 pair를 왼쪽부터 훑으며 새 token ID 하나로 치환합니다.
             merged = []
             i = 0
             while i < len(ids):
@@ -128,6 +132,7 @@ class BPETokenizer:
                 return {"type": "tuple", "value": list(token)}
             return {"type": "str", "value": token}
 
+        # bytes와 tuple은 JSON 기본 타입이 아니므로 type 정보를 같이 저장합니다.
         payload = {
             "vocab_size": self.vocab_size,
             "id_to_token": [
@@ -156,6 +161,7 @@ class BPETokenizer:
                 return tuple(data["value"])
             return data["value"]
 
+        # 저장된 type 정보를 이용해 str/bytes/tuple 토큰을 원래 형태로 복원합니다.
         for item in payload["id_to_token"]:
             token_id = int(item["id"])
             token = deserialize_token(item["token"])
@@ -174,6 +180,7 @@ class BPETokenizer:
         if not self.id_to_token:
             self._init_special_tokens()
 
+        # 학습된 merge rule을 같은 순서로 적용해야 train 때 만든 토큰화를 재현할 수 있습니다.
         ids = [BYTE_OFFSET + byte_value for byte_value in text.encode("utf-8")]
         for pair in self.merges:
             new_id = self.token_to_id.get(pair)
@@ -204,6 +211,7 @@ class BPETokenizer:
         """
         byte_values = []
 
+        # merge 토큰은 pair를 재귀적으로 펼쳐 원래 byte sequence로 되돌립니다.
         def expand(token_id: int) -> None:
             token = self.id_to_token.get(token_id)
             if isinstance(token, bytes):
