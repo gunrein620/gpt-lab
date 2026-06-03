@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 try:
@@ -13,91 +14,102 @@ except ImportError:
     from model import GPTModel
 
 
-def make_sentiment_dataset(
-    train_tsv_path: str | Path,
-    test_tsv_path: str | Path | None = None,
-    val_ratio: float = 0.08,
-    seed: int = 42,
-    output_dir: str | Path | None = None,
-) -> tuple[list[dict], list[dict], list[dict]]:
-    """
-    TODO: NSMC TSV를 읽어 train/validation/test 감성 분류 데이터를 만듭니다.
+def make_sentiment_dataset(train_tsv_path, test_tsv_path=None, val_ratio=0.08, seed=42, output_dir=None):
+    import random
+    random.seed(seed)
 
-    반환 형식:
-        [{"text": "리뷰", "label": 0 또는 1}, ...]
-    """
-    raise NotImplementedError("make_sentiment_dataset을 구현하세요.")
+    def read_tsv(path):
+        data = []
+        with open(path, encoding="utf-8") as f:
+            next(f)  # header skip
+            for line in f:
+                parts = line.strip().split("\t")
+                if len(parts) == 3 and parts[1].strip():
+                    data.append({"text": parts[1], "label": int(parts[2])})
+        return data
+
+    train_all = read_tsv(train_tsv_path)
+    random.shuffle(train_all)
+    val_size = int(len(train_all) * val_ratio)
+    val_data = train_all[:val_size]
+    train_data = train_all[val_size:]
+    test_data = read_tsv(test_tsv_path) if test_tsv_path else []
+
+    return train_data, val_data, test_data
 
 
 class ReviewSentimentDataset(Dataset):
-    """감성 분류용 Dataset. 리뷰 하나와 label 하나를 반환합니다."""
-
-    def __init__(
-        self,
-        data: list[dict],
-        tokenizer,
-        max_length: int = 128,
-        pad_id: int | None = None,
-    ):
+    def __init__(self, data, tokenizer, max_length=128, pad_id=None):
         self.data = data
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.pad_id = tokenizer.get_pad_id() if pad_id is None else pad_id
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
-        """TODO: text를 encode하고 max_length까지 자르거나 padding한 뒤 label과 함께 반환합니다."""
-        raise NotImplementedError("ReviewSentimentDataset.__getitem__을 구현하세요.")
+    def __getitem__(self, idx):
+        item = self.data[idx]
+        encoded = self.tokenizer.encode(item["text"])[:self.max_length]
+        pad_len = self.max_length - len(encoded)
+        encoded = encoded + [self.pad_id] * pad_len
+        return torch.tensor(encoded, dtype=torch.long), item["label"]
 
 
 class GPTForSequenceClassification(nn.Module):
-    """
-    GPT backbone 위에 감성 분류용 Linear head를 붙인 모델.
-
-    주의: LM head는 다음 토큰 예측용입니다. 감성 분류는 hidden state 위에 별도 classifier를 붙입니다.
-    """
-
-    def __init__(
-        self,
-        gpt_model: GPTModel,
-        num_labels: int = 2,
-        drop_rate: float = 0.1,
-    ):
+    def __init__(self, gpt_model, num_labels=2, drop_rate=0.1):
         super().__init__()
         self.gpt = gpt_model
         self.num_labels = num_labels
-        # TODO: dropout과 classifier를 정의하세요. classifier 입력 차원은 gpt_model.config["emb_dim"]입니다.
-        raise NotImplementedError("GPTForSequenceClassification.__init__을 구현하세요.")
+        self.dropout = nn.Dropout(drop_rate)
+        self.classifier = nn.Linear(gpt_model.config["emb_dim"], num_labels)
 
-    def forward(
-        self,
-        input_ids: torch.Tensor,
-        labels: torch.Tensor | None = None,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        """
-        TODO: GPT hidden state에서 문장 대표 벡터를 뽑아 분류 logits를 만듭니다.
+    def forward(self, input_ids, labels=None):
+        # GPT embedding + transformer blocks
+        x = self.gpt.embedding(input_ids)
+        for block in self.gpt.blocks:
+            x = block(x)
+        x = self.gpt.norm(x)
 
-        labels가 있으면 (loss, logits), 없으면 logits를 반환합니다.
-        """
-        raise NotImplementedError("GPTForSequenceClassification.forward를 구현하세요.")
+        # padding이 아닌 마지막 토큰의 hidden state 사용
+        pad_id = 0
+        mask = (input_ids != pad_id).long()
+        last_pos = mask.sum(dim=1) - 1
+        batch_size = x.size(0)
+        hidden = x[torch.arange(batch_size), last_pos]
+
+        hidden = self.dropout(hidden)
+        logits = self.classifier(hidden)
+
+        if labels is None:
+            return logits
+        loss = F.cross_entropy(logits, labels)
+        return loss, logits
 
 
-def train_epoch_sentiment(
-    model: GPTForSequenceClassification,
-    train_loader,
-    optimizer: torch.optim.Optimizer,
-    device: torch.device,
-) -> tuple[float, float]:
-    """TODO: 감성 분류 모델을 1 epoch 훈련하고 (평균 loss, accuracy)를 반환합니다."""
-    raise NotImplementedError("train_epoch_sentiment를 구현하세요.")
+def train_epoch_sentiment(model, train_loader, optimizer, device):
+    model.train()
+    total_loss, correct, total = 0.0, 0, 0
+    for input_ids, labels in train_loader:
+        input_ids, labels = input_ids.to(device), labels.to(device)
+        optimizer.zero_grad()
+        loss, logits = model(input_ids, labels=labels)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+        correct += (logits.argmax(dim=-1) == labels).sum().item()
+        total += labels.size(0)
+    return total_loss / len(train_loader), correct / total
 
 
-def evaluate_sentiment(
-    model: GPTForSequenceClassification,
-    data_loader,
-    device: torch.device,
-) -> tuple[float, float]:
-    """TODO: 감성 분류 모델을 평가하고 (평균 loss, accuracy)를 반환합니다."""
-    raise NotImplementedError("evaluate_sentiment를 구현하세요.")
+def evaluate_sentiment(model, data_loader, device):
+    model.eval()
+    total_loss, correct, total = 0.0, 0, 0
+    with torch.no_grad():
+        for input_ids, labels in data_loader:
+            input_ids, labels = input_ids.to(device), labels.to(device)
+            loss, logits = model(input_ids, labels=labels)
+            total_loss += loss.item()
+            correct += (logits.argmax(dim=-1) == labels).sum().item()
+            total += labels.size(0)
+    return total_loss / len(data_loader), correct / total
