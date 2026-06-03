@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """NSMC 감성 분류 미세 조정 과제 템플릿."""
 
+from __future__ import annotations
+
+import csv
+import json
+import random
+import re
 from pathlib import Path
 
 import torch
@@ -14,102 +20,194 @@ except ImportError:
     from model import GPTModel
 
 
-def make_sentiment_dataset(train_tsv_path, test_tsv_path=None, val_ratio=0.08, seed=42, output_dir=None):
-    import random
-    random.seed(seed)
+def make_sentiment_dataset(
+    train_tsv_path: str | Path,
+    test_tsv_path: str | Path | None = None,
+    val_ratio: float = 0.08,
+    seed: int = 42,
+    output_dir: str | Path | None = None,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """
+    NSMC TSV를 읽어 train/validation/test 감성 분류 데이터를 만듭니다.
 
-    def read_tsv(path):
-        data = []
-        with open(path, encoding="utf-8") as f:
-            next(f)  # header skip
-            for line in f:
-                parts = line.strip().split("\t")
-                if len(parts) == 3 and parts[1].strip():
-                    data.append({"text": parts[1], "label": int(parts[2])})
-        return data
+    반환 형식:
+        [{"text": "리뷰", "label": 0 또는 1}, ...]
+    """
+    train_rows = _read_nsmc_tsv(train_tsv_path)
+    test_rows = _read_nsmc_tsv(test_tsv_path) if test_tsv_path is not None else []
 
-    train_all = read_tsv(train_tsv_path)
-    random.shuffle(train_all)
-    val_size = int(len(train_all) * val_ratio)
-    val_data = train_all[:val_size]
-    train_data = train_all[val_size:]
-    test_data = read_tsv(test_tsv_path) if test_tsv_path else []
+    rng = random.Random(seed)
+    rng.shuffle(train_rows)
+
+    if train_rows and val_ratio > 0:
+        val_size = max(1, int(len(train_rows) * val_ratio))
+    else:
+        val_size = 0
+    val_size = min(val_size, len(train_rows))
+
+    val_data = train_rows[:val_size]
+    train_data = train_rows[val_size:]
+    test_data = test_rows
+
+    if output_dir is not None:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        _write_jsonl(output_path / "nsmc_sentiment_train.jsonl", train_data)
+        _write_jsonl(output_path / "nsmc_sentiment_val.jsonl", val_data)
+        _write_jsonl(output_path / "nsmc_sentiment_test.jsonl", test_data)
 
     return train_data, val_data, test_data
 
 
 class ReviewSentimentDataset(Dataset):
-    def __init__(self, data, tokenizer, max_length=128, pad_id=None):
+    """감성 분류용 Dataset. 리뷰 하나와 label 하나를 반환합니다."""
+
+    def __init__(
+        self,
+        data: list[dict],
+        tokenizer,
+        max_length: int = 128,
+        pad_id: int | None = None,
+    ):
         self.data = data
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.pad_id = tokenizer.get_pad_id() if pad_id is None else pad_id
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.data)
 
-    def __getitem__(self, idx):
-        item = self.data[idx]
-        encoded = self.tokenizer.encode(item["text"])[:self.max_length]
-        pad_len = self.max_length - len(encoded)
-        encoded = encoded + [self.pad_id] * pad_len
-        return torch.tensor(encoded, dtype=torch.long), item["label"]
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+        """text를 encode하고 max_length까지 자르거나 padding한 뒤 label과 함께 반환합니다."""
+        row = self.data[idx]
+        ids = self.tokenizer.encode(row["text"], add_bos_eos=True)
+        ids = ids[: self.max_length]
+        if len(ids) < self.max_length:
+            ids = ids + [self.pad_id] * (self.max_length - len(ids))
+        return torch.tensor(ids, dtype=torch.long), int(row["label"])
 
 
 class GPTForSequenceClassification(nn.Module):
-    def __init__(self, gpt_model, num_labels=2, drop_rate=0.1):
+    """
+    GPT backbone 위에 감성 분류용 Linear head를 붙인 모델.
+
+    주의: LM head는 다음 토큰 예측용입니다. 감성 분류는 hidden state 위에 별도 classifier를 붙입니다.
+    """
+
+    def __init__(
+        self,
+        gpt_model: GPTModel,
+        num_labels: int = 2,
+        drop_rate: float = 0.1,
+    ):
         super().__init__()
         self.gpt = gpt_model
         self.num_labels = num_labels
         self.dropout = nn.Dropout(drop_rate)
         self.classifier = nn.Linear(gpt_model.config["emb_dim"], num_labels)
 
-    def forward(self, input_ids, labels=None):
-        # GPT embedding + transformer blocks
-        x = self.gpt.embedding(input_ids)
-        for block in self.gpt.blocks:
-            x = block(x)
-        x = self.gpt.norm(x)
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        labels: torch.Tensor | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """
+        GPT hidden state에서 문장 대표 벡터를 뽑아 분류 logits를 만듭니다.
 
-        # padding이 아닌 마지막 토큰의 hidden state 사용
-        pad_id = 0
-        mask = (input_ids != pad_id).long()
-        last_pos = mask.sum(dim=1) - 1
-        batch_size = x.size(0)
-        hidden = x[torch.arange(batch_size), last_pos]
+        labels가 있으면 (loss, logits), 없으면 logits를 반환합니다.
+        """
+        if hasattr(self.gpt, "forward_hidden"):
+            hidden = self.gpt.forward_hidden(input_ids)
+        else:
+            hidden = self.gpt.embedding(input_ids)
+            for block in self.gpt.blocks:
+                hidden = block(hidden, causal_mask=True)
+            hidden = self.gpt.final_norm(hidden)
 
-        hidden = self.dropout(hidden)
-        logits = self.classifier(hidden)
+        non_pad = input_ids.ne(0)
+        last_indices = non_pad.long().sum(dim=1).clamp(min=1) - 1
+        batch_indices = torch.arange(input_ids.size(0), device=input_ids.device)
+        pooled = hidden[batch_indices, last_indices]
+        logits = self.classifier(self.dropout(pooled))
 
         if labels is None:
             return logits
+
+        labels = labels.to(logits.device)
         loss = F.cross_entropy(logits, labels)
         return loss, logits
 
 
-def train_epoch_sentiment(model, train_loader, optimizer, device):
+def train_epoch_sentiment(
+    model: GPTForSequenceClassification,
+    train_loader,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+) -> tuple[float, float]:
+    """감성 분류 모델을 1 epoch 훈련하고 (평균 loss, accuracy)를 반환합니다."""
     model.train()
-    total_loss, correct, total = 0.0, 0, 0
+    total_loss = 0.0
+    total_correct = 0
+    total_count = 0
+
     for input_ids, labels in train_loader:
-        input_ids, labels = input_ids.to(device), labels.to(device)
-        optimizer.zero_grad()
+        input_ids = input_ids.to(device)
+        labels = labels.to(device)
+        optimizer.zero_grad(set_to_none=True)
         loss, logits = model(input_ids, labels=labels)
         loss.backward()
         optimizer.step()
-        total_loss += loss.item()
-        correct += (logits.argmax(dim=-1) == labels).sum().item()
-        total += labels.size(0)
-    return total_loss / len(train_loader), correct / total
+
+        total_loss += loss.item() * labels.size(0)
+        total_correct += (logits.argmax(dim=-1) == labels).sum().item()
+        total_count += labels.size(0)
+
+    return total_loss / max(1, total_count), total_correct / max(1, total_count)
 
 
-def evaluate_sentiment(model, data_loader, device):
+def evaluate_sentiment(
+    model: GPTForSequenceClassification,
+    data_loader,
+    device: torch.device,
+) -> tuple[float, float]:
+    """감성 분류 모델을 평가하고 (평균 loss, accuracy)를 반환합니다."""
     model.eval()
-    total_loss, correct, total = 0.0, 0, 0
+    total_loss = 0.0
+    total_correct = 0
+    total_count = 0
+
     with torch.no_grad():
         for input_ids, labels in data_loader:
-            input_ids, labels = input_ids.to(device), labels.to(device)
+            input_ids = input_ids.to(device)
+            labels = labels.to(device)
             loss, logits = model(input_ids, labels=labels)
-            total_loss += loss.item()
-            correct += (logits.argmax(dim=-1) == labels).sum().item()
-            total += labels.size(0)
-    return total_loss / len(data_loader), correct / total
+            total_loss += loss.item() * labels.size(0)
+            total_correct += (logits.argmax(dim=-1) == labels).sum().item()
+            total_count += labels.size(0)
+
+    return total_loss / max(1, total_count), total_correct / max(1, total_count)
+
+
+def _clean_text(text: str | None) -> str:
+    if text is None:
+        return ""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _read_nsmc_tsv(path: str | Path) -> list[dict]:
+    rows: list[dict] = []
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            text = _clean_text(row.get("document"))
+            label = row.get("label")
+            if not text or label not in {"0", "1"}:
+                continue
+            rows.append({"text": text, "label": int(label)})
+    return rows
+
+
+def _write_jsonl(path: str | Path, rows: list[dict]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """GPT 사전 학습용 Dataset/DataLoader 과제 템플릿."""
 
+from __future__ import annotations
+
 import torch
 from torch.utils.data import DataLoader, Dataset
 
@@ -23,28 +25,34 @@ class GPTDataset(Dataset):
         self.token_ids = token_ids
         self.context_length = context_length
         self.stride = stride if stride is not None else context_length
-        # TODO: 만들 수 있는 학습 샘플 개수를 self._length에 저장하세요.
-        self._length = (len(self.token_ids) - self.context_length - 1) // self.stride + 1
+        if self.context_length <= 0:
+            raise ValueError("context_length must be positive")
+        if self.stride <= 0:
+            raise ValueError("stride must be positive")
+        self._length = max(0, (len(self.token_ids) - self.context_length - 1) // self.stride + 1)
 
     def __len__(self) -> int:
-        """TODO: 전체 샘플 개수를 반환합니다."""
+        """전체 샘플 개수를 반환합니다."""
         return self._length
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        TODO: idx번째 input_ids와 target_ids를 LongTensor로 반환합니다.
+        idx번째 input_ids와 target_ids를 LongTensor로 반환합니다.
 
         Returns:
             input_ids: (context_length,)
             target_ids: (context_length,)
-        """        
-        start_idx = idx * self.stride
-        end_idx = start_idx + self.context_length
+        """
+        if idx < 0:
+            idx += self._length
+        if idx < 0 or idx >= self._length:
+            raise IndexError("GPTDataset index out of range")
 
-        input_ids = torch.tensor(self.token_ids[start_idx : end_idx], dtype=torch.long)
-        target_ids = torch.tensor(self.token_ids[start_idx + 1 : end_idx + 1], dtype=torch.long)
-
-        return (input_ids, target_ids)
+        start = idx * self.stride
+        end = start + self.context_length
+        input_ids = self.token_ids[start:end]
+        target_ids = self.token_ids[start + 1 : end + 1]
+        return torch.tensor(input_ids, dtype=torch.long), torch.tensor(target_ids, dtype=torch.long)
 
 
 def create_dataloader(
@@ -56,21 +64,12 @@ def create_dataloader(
     shuffle: bool = True,
     num_workers: int = 0,
 ) -> DataLoader:
-    """TODO: GPTDataset을 만들고 torch.utils.data.DataLoader로 감싸 반환합니다."""
-    # reference: https://docs.pytorch.org/docs/2.12/data.html#torch.utils.data.DataLoader
-
-    dataset = GPTDataset(
-        token_ids= token_ids,
-        context_length= context_length,
-        stride= stride
-    )
-
-    dataloader = DataLoader(
+    """GPTDataset을 만들고 torch.utils.data.DataLoader로 감싸 반환합니다."""
+    dataset = GPTDataset(token_ids, context_length=context_length, stride=stride)
+    return DataLoader(
         dataset,
-        batch_size= batch_size,
-        drop_last= drop_last,
-        shuffle= shuffle,
-        num_workers= num_workers
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=drop_last,
+        num_workers=num_workers,
     )
-
-    return dataloader
