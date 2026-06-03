@@ -10,95 +10,103 @@ except ImportError:
     from model import GPTModel
 
 
-def calc_loss_batch(
-    input_batch: torch.Tensor,
-    target_batch: torch.Tensor,
-    model: GPTModel,
-    device: torch.device,
-) -> torch.Tensor:
-    """TODO: 한 배치를 device로 옮긴 뒤 다음 토큰 예측 cross entropy loss를 계산합니다."""
-    raise NotImplementedError("calc_loss_batch를 구현하세요.")
+def calc_loss_batch(input_batch, target_batch, model, device):
+    input_batch = input_batch.to(device)
+    target_batch = target_batch.to(device)
+    loss, _ = model(input_batch, targets=target_batch)
+    return loss
 
 
-def calc_loss_loader(
-    data_loader,
-    model: GPTModel,
-    device: torch.device,
-    num_batches: int | None = None,
-) -> float:
-    """TODO: data_loader의 평균 loss를 계산합니다. 검증에서는 torch.no_grad()를 사용하세요."""
-    raise NotImplementedError("calc_loss_loader를 구현하세요.")
+def calc_loss_loader(data_loader, model, device, num_batches=None):
+    total_loss = 0.0
+    num_batches = num_batches or len(data_loader)
+    model.eval()
+    with torch.no_grad():
+        for i, (inp, tgt) in enumerate(data_loader):
+            if i >= num_batches:
+                break
+            loss = calc_loss_batch(inp, tgt, model, device)
+            total_loss += loss.item()
+    model.train()
+    return total_loss / num_batches
 
 
-def save_checkpoint(
-    model: GPTModel,
-    optimizer: torch.optim.Optimizer,
-    epoch: int,
-    global_step: int,
-    path: str,
-) -> None:
-    """TODO: model/optimizer 상태, epoch, global_step을 torch.save로 저장합니다."""
-    raise NotImplementedError("save_checkpoint를 구현하세요.")
+def save_checkpoint(model, optimizer, epoch, global_step, path):
+    torch.save({
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "epoch": epoch,
+        "global_step": global_step,
+    }, path)
 
 
-def load_checkpoint(
-    model: GPTModel,
-    optimizer: torch.optim.Optimizer | None,
-    path: str,
-    device: torch.device,
-) -> tuple[int, int]:
-    """TODO: torch.load로 checkpoint를 읽어 model/optimizer 상태를 복원합니다."""
-    raise NotImplementedError("load_checkpoint를 구현하세요.")
+def load_checkpoint(model, optimizer, path, device):
+    ckpt = torch.load(path, map_location=device)
+    model.load_state_dict(ckpt["model_state"])
+    if optimizer is not None:
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+    return ckpt["epoch"], ckpt["global_step"]
 
 
-def generate(
-    model: GPTModel,
-    idx: torch.Tensor,
-    max_new_tokens: int,
-    context_size: int,
-    temperature: float = 1.0,
-    top_k: int | None = None,
-    eos_id: int | None = None,
-) -> torch.Tensor:
-    """TODO: temperature와 top-k 샘플링을 지원하는 생성 함수를 구현합니다."""
-    raise NotImplementedError("generate를 구현하세요.")
+def generate(model, idx, max_new_tokens, context_size, temperature=1.0, top_k=None, eos_id=None):
+    model.eval()
+    with torch.no_grad():
+        for _ in range(max_new_tokens):
+            idx_cond = idx[:, -context_size:]
+            logits = model(idx_cond)
+            logits = logits[:, -1, :]
+            if temperature == 0:
+                next_token = logits.argmax(dim=-1, keepdim=True)
+            else:
+                logits = logits / temperature
+                if top_k is not None:
+                    values, _ = torch.topk(logits, top_k)
+                    logits[logits < values[:, -1:]] = float('-inf')
+                probs = torch.softmax(logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+            if eos_id is not None and next_token.item() == eos_id:
+                break
+            idx = torch.cat([idx, next_token], dim=1)
+    return idx
 
 
-def generate_and_print_sample(
-    model: GPTModel,
-    tokenizer,
-    device: torch.device,
-    start_context: str,
-    max_new_tokens: int = 50,
-    context_size: int = 256,
-    temperature: float = 0.8,
-    top_k: int | None = 40,
-) -> None:
-    """TODO: start_context를 encode하고 generate 후 decode하여 출력합니다."""
-    raise NotImplementedError("generate_and_print_sample을 구현하세요.")
+def generate_and_print_sample(model, tokenizer, device, start_context, max_new_tokens=50, context_size=256, temperature=0.8, top_k=40):
+    model.eval()
+    encoded = tokenizer.encode(start_context)
+    idx = torch.tensor([encoded], dtype=torch.long).to(device)
+    out = generate(model, idx, max_new_tokens, context_size, temperature, top_k)
+    print(tokenizer.decode(out[0].tolist()))
+    model.train()
 
 
-def train_model(
-    model: GPTModel,
-    train_loader,
-    val_loader,
-    optimizer: torch.optim.Optimizer,
-    device: torch.device,
-    num_epochs: int,
-    eval_freq: int,
-    eval_iter: int,
-    start_context: str,
-    tokenizer,
-    ckpt_freq: int | None = None,
-    start_epoch: int = 0,
-    global_step: int = 0,
-) -> list[float]:
-    """TODO: 사전 학습 루프를 구현하고 epoch별 train loss 리스트를 반환합니다."""
-    raise NotImplementedError("train_model을 구현하세요.")
+def train_model(model, train_loader, val_loader, optimizer, device, num_epochs, eval_freq, eval_iter, start_context, tokenizer, ckpt_freq=None, start_epoch=0, global_step=0):
+    train_losses, val_losses = [], []
+    model.train()
+    for epoch in range(start_epoch, start_epoch + num_epochs):
+        epoch_loss = 0.0
+        for inp, tgt in train_loader:
+            optimizer.zero_grad()
+            loss = calc_loss_batch(inp, tgt, model, device)
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+            global_step += 1
+        epoch_loss /= len(train_loader)
+        train_losses.append(epoch_loss)
+
+        if (epoch + 1) % eval_freq == 0:
+            val_loss = calc_loss_loader(val_loader, model, device, eval_iter)
+            val_losses.append(val_loss)
+            print(f"Epoch {epoch+1} | train loss: {epoch_loss:.4f} | val loss: {val_loss:.4f}")
+            generate_and_print_sample(model, tokenizer, device, start_context)
+
+        if ckpt_freq and (epoch + 1) % ckpt_freq == 0:
+            save_checkpoint(model, optimizer, epoch, global_step, f"ckpt_epoch{epoch+1}.pt")
+
+    return train_losses
 
 
-def plot_losses(train_losses: list[float], val_losses: list[float] | None = None) -> None:
-    """훈련/검증 손실 그래프를 그리는 제공 함수."""
+def plot_losses(train_losses, val_losses=None):
     plt.plot(train_losses, label="Train")
     if val_losses is not None:
         plt.plot(val_losses, label="Val")
