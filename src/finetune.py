@@ -4,6 +4,9 @@
 import json
 import random
 from pathlib import Path
+import csv
+import json
+import random
 
 import torch
 import torch.nn as nn
@@ -29,63 +32,42 @@ def make_sentiment_dataset(
     반환 형식:
         [{"text": "리뷰", "label": 0 또는 1}, ...]
     """
-    if not 0 <= val_ratio < 1:
-        raise ValueError("val_ratio must satisfy 0 <= val_ratio < 1")
-
-    def read_nsmc_tsv(path: str | Path) -> list[dict]:
-        rows: list[dict] = []
-        with Path(path).open("r", encoding="utf-8") as f:
-            for line_idx, line in enumerate(f):
-                line = line.rstrip("\n")
-                if line_idx == 0 and line.startswith("id\tdocument\tlabel"):
+    # NSMC TSV에서 빈 리뷰를 제거하고 감성 분류에 필요한 text/label만 남깁니다.
+    def read_nsmc(path: str | Path) -> list[dict]:
+        rows = []
+        with Path(path).open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f, delimiter="\t")
+            for row in reader:
+                text = (row.get("document") or "").strip()
+                label = row.get("label")
+                if not text or label is None:
                     continue
-                if not line:
-                    continue
-
-                parts = line.split("\t")
-                if len(parts) < 3:
-                    continue
-
-                document = "\t".join(parts[1:-1]).strip()
-                if not document:
-                    continue
-
-                try:
-                    label = int(parts[-1])
-                except ValueError:
-                    continue
-                if label not in (0, 1):
-                    continue
-
-                rows.append({"text": document, "label": label})
+                rows.append({"text": text, "label": int(label)})
         return rows
 
-    train_rows = read_nsmc_tsv(train_tsv_path)
-    test_rows = read_nsmc_tsv(test_tsv_path) if test_tsv_path is not None else []
-
+    train_rows = read_nsmc(train_tsv_path)
+    # seed를 고정해 train/validation split이 매번 같은 결과가 되게 합니다.
     rng = random.Random(seed)
     rng.shuffle(train_rows)
 
     val_size = int(len(train_rows) * val_ratio)
     if val_ratio > 0 and len(train_rows) > 1:
         val_size = max(1, val_size)
-
     val_data = train_rows[:val_size]
     train_data = train_rows[val_size:]
-    test_data = test_rows
+    test_data = read_nsmc(test_tsv_path) if test_tsv_path is not None else []
 
     if output_dir is not None:
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        def write_jsonl(path: Path, rows: list[dict]) -> None:
-            with path.open("w", encoding="utf-8") as f:
-                for row in rows:
-                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-        write_jsonl(output_path / "nsmc_sentiment_train.jsonl", train_data)
-        write_jsonl(output_path / "nsmc_sentiment_val.jsonl", val_data)
-        write_jsonl(output_path / "nsmc_sentiment_test.jsonl", test_data)
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for name, data in [
+            ("nsmc_sentiment_train.jsonl", train_data),
+            ("nsmc_sentiment_val.jsonl", val_data),
+            ("nsmc_sentiment_test.jsonl", test_data),
+        ]:
+            with (out_dir / name).open("w", encoding="utf-8") as f:
+                for item in data:
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
     return train_data, val_data, test_data
 
@@ -109,20 +91,14 @@ class ReviewSentimentDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
-        """text를 encode하고 max_length까지 자르거나 padding한 뒤 label과 함께 반환합니다."""
+        """TODO: text를 encode하고 max_length까지 자르거나 padding한 뒤 label과 함께 반환합니다."""
+        # 리뷰를 token id로 바꾸고 고정 길이 batch를 만들 수 있게 padding/truncation 합니다.
         item = self.data[idx]
-        try:
-            token_ids = self.tokenizer.encode(item["text"], add_bos_eos=True)
-        except TypeError:
-            token_ids = self.tokenizer.encode(item["text"])
-
-        token_ids = token_ids[: self.max_length]
-        if len(token_ids) < self.max_length:
-            token_ids = token_ids + [self.pad_id] * (self.max_length - len(token_ids))
-
-        input_ids = torch.tensor(token_ids, dtype=torch.long)
-        label = int(item["label"])
-        return input_ids, label
+        ids = self.tokenizer.encode(item["text"], add_bos_eos=True)
+        ids = ids[: self.max_length]
+        if len(ids) < self.max_length:
+            ids = ids + [self.pad_id] * (self.max_length - len(ids))
+        return torch.tensor(ids, dtype=torch.long), int(item["label"])
 
 
 class GPTForSequenceClassification(nn.Module):
@@ -141,7 +117,7 @@ class GPTForSequenceClassification(nn.Module):
         super().__init__()
         self.gpt = gpt_model
         self.num_labels = num_labels
-        self.pad_id = 0
+        # TODO: dropout과 classifier를 정의하세요. classifier 입력 차원은 gpt_model.config["emb_dim"]입니다.
         self.dropout = nn.Dropout(drop_rate)
         self.classifier = nn.Linear(gpt_model.config["emb_dim"], num_labels)
 
@@ -155,21 +131,15 @@ class GPTForSequenceClassification(nn.Module):
 
         labels가 있으면 (loss, logits), 없으면 logits를 반환합니다.
         """
+        # LM head 대신 GPT hidden state의 마지막 위치를 문장 대표 벡터로 사용해 분류합니다.
         x = self.gpt.embedding(input_ids)
         for block in self.gpt.blocks:
             x = block(x, causal_mask=True)
-        x = self.gpt.final_norm(x)
-
-        valid_lengths = (input_ids != self.pad_id).sum(dim=1)
-        last_token_indices = torch.clamp(valid_lengths - 1, min=0)
-        batch_indices = torch.arange(input_ids.size(0), device=input_ids.device)
-        pooled = x[batch_indices, last_token_indices]
-
+        hidden = self.gpt.final_norm(x)
+        pooled = hidden[:, -1, :]
         logits = self.classifier(self.dropout(pooled))
         if labels is None:
             return logits
-
-        labels = labels.to(input_ids.device).long()
         loss = F.cross_entropy(logits, labels)
         return loss, logits
 
@@ -180,29 +150,24 @@ def train_epoch_sentiment(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
 ) -> tuple[float, float]:
-    """감성 분류 모델을 1 epoch 훈련하고 (평균 loss, accuracy)를 반환합니다."""
+    """TODO: 감성 분류 모델을 1 epoch 훈련하고 (평균 loss, accuracy)를 반환합니다."""
     model.train()
     total_loss = 0.0
-    total_correct = 0
-    total_examples = 0
-
-    for input_batch, label_batch in train_loader:
-        input_batch = input_batch.to(device)
-        label_batch = label_batch.to(device)
-
+    correct = 0
+    total = 0
+    for input_ids, labels in train_loader:
+        input_ids = input_ids.to(device)
+        labels = labels.to(device)
+        # 분류 loss를 기준으로 classifier와 GPT backbone 파라미터를 업데이트합니다.
         optimizer.zero_grad()
-        loss, logits = model(input_batch, labels=label_batch)
+        loss, logits = model(input_ids, labels=labels)
         loss.backward()
         optimizer.step()
 
-        batch_size = input_batch.size(0)
-        total_loss += loss.item() * batch_size
-        total_correct += (logits.argmax(dim=-1) == label_batch).sum().item()
-        total_examples += batch_size
-
-    if total_examples == 0:
-        return float("nan"), float("nan")
-    return total_loss / total_examples, total_correct / total_examples
+        total_loss += loss.item() * input_ids.size(0)
+        correct += (logits.argmax(dim=-1) == labels).sum().item()
+        total += input_ids.size(0)
+    return total_loss / total if total else 0.0, correct / total if total else 0.0
 
 
 def evaluate_sentiment(
@@ -210,26 +175,17 @@ def evaluate_sentiment(
     data_loader,
     device: torch.device,
 ) -> tuple[float, float]:
-    """감성 분류 모델을 평가하고 (평균 loss, accuracy)를 반환합니다."""
-    was_training = model.training
+    """TODO: 감성 분류 모델을 평가하고 (평균 loss, accuracy)를 반환합니다."""
     model.eval()
     total_loss = 0.0
-    total_correct = 0
-    total_examples = 0
-
+    correct = 0
+    total = 0
     with torch.no_grad():
-        for input_batch, label_batch in data_loader:
-            input_batch = input_batch.to(device)
-            label_batch = label_batch.to(device)
-
-            loss, logits = model(input_batch, labels=label_batch)
-            batch_size = input_batch.size(0)
-            total_loss += loss.item() * batch_size
-            total_correct += (logits.argmax(dim=-1) == label_batch).sum().item()
-            total_examples += batch_size
-
-    if was_training:
-        model.train()
-    if total_examples == 0:
-        return float("nan"), float("nan")
-    return total_loss / total_examples, total_correct / total_examples
+        for input_ids, labels in data_loader:
+            input_ids = input_ids.to(device)
+            labels = labels.to(device)
+            loss, logits = model(input_ids, labels=labels)
+            total_loss += loss.item() * input_ids.size(0)
+            correct += (logits.argmax(dim=-1) == labels).sum().item()
+            total += input_ids.size(0)
+    return total_loss / total if total else 0.0, correct / total if total else 0.0

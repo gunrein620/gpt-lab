@@ -10,6 +10,8 @@ UTF-8 byte-level BPE 토크나이저 과제 템플릿.
 import json
 from collections import Counter
 from pathlib import Path
+import json
+from collections import Counter
 
 PAD_TOKEN = "<pad>"
 UNK_TOKEN = "<unk>"
@@ -32,7 +34,7 @@ class BPETokenizer:
     - 260 이상: BPE merge로 생성한 토큰
     """
 
-    def __init__(self, vocab_size: int = 3000):
+    def __init__(self, vocab_size: int = 4096):
         self.vocab_size = vocab_size
         self.id_to_token = {}
         self.token_to_id = {}
@@ -43,13 +45,15 @@ class BPETokenizer:
         1. 특수 토큰 4개를 고정 ID 0~3에 등록합니다.
         2. byte 0~255를 ID 4~259에 bytes([byte_value]) 형태로 등록합니다.
         """
+        # 매번 초기 상태를 고정해서 special token과 byte token ID 배치를 보장합니다.
         self.id_to_token = {}
         self.token_to_id = {}
         self.merges = []
 
-        for token, token_id in SPECIAL_IDS.items():
-            self.id_to_token[token_id] = token
-            self.token_to_id[token] = token_id
+        for token in SPECIAL_TOKENS:
+            idx = SPECIAL_IDS[token]
+            self.id_to_token[idx] = token
+            self.token_to_id[token] = idx
 
         for byte_value in range(NUM_BYTES):
             token_id = BYTE_OFFSET + byte_value
@@ -84,22 +88,24 @@ class BPETokenizer:
         - `self.merges`, `self.id_to_token`, `self.token_to_id`를 갱신합니다.
         """
         self._init_special_tokens()
-        ids = [BYTE_OFFSET + b for b in corpus.encode("utf-8")]
+        # 문자열을 먼저 UTF-8 byte ID로 바꾼 뒤, 자주 붙는 인접 pair를 새 토큰으로 합칩니다.
+        ids = [BYTE_OFFSET + byte_value for byte_value in corpus.encode("utf-8")]
 
-        while len(self.id_to_token) < self.vocab_size:
+        while len(self.id_to_token) < self.vocab_size and len(ids) >= 2:
+            # 현재 시퀀스에서 가장 자주 등장한 이웃 토큰 쌍이 다음 merge 대상입니다.
             pair_counts = Counter(zip(ids, ids[1:]))
             if not pair_counts:
                 break
-
-            best_pair, best_count = pair_counts.most_common(1)[0]
-            if best_count < 2:
+            best_pair, count = pair_counts.most_common(1)[0]
+            if count < 2:
                 break
 
-            new_id = len(self.id_to_token)
+            new_id = BYTE_OFFSET + NUM_BYTES + len(self.merges)
+            self.merges.append(best_pair)
             self.id_to_token[new_id] = best_pair
             self.token_to_id[best_pair] = new_id
-            self.merges.append(best_pair)
 
+            # 선택된 pair를 왼쪽부터 훑으며 새 token ID 하나로 치환합니다.
             merged = []
             i = 0
             while i < len(ids):
@@ -118,50 +124,47 @@ class BPETokenizer:
         bytes와 tuple은 JSON에 바로 저장할 수 없으므로 type 정보를 함께 저장하세요.
         """
         path = Path(path)
-        vocab = []
-        for token_id, token in sorted(self.id_to_token.items()):
-            if isinstance(token, str):
-                item = {"id": token_id, "type": "str", "value": token}
-            elif isinstance(token, bytes):
-                item = {"id": token_id, "type": "bytes", "value": list(token)}
-            elif isinstance(token, tuple):
-                item = {"id": token_id, "type": "tuple", "value": list(token)}
-            else:
-                raise TypeError(f"Unsupported token type: {type(token)!r}")
-            vocab.append(item)
 
-        data = {
+        def serialize_token(token):
+            if isinstance(token, bytes):
+                return {"type": "bytes", "value": list(token)}
+            if isinstance(token, tuple):
+                return {"type": "tuple", "value": list(token)}
+            return {"type": "str", "value": token}
+
+        # bytes와 tuple은 JSON 기본 타입이 아니므로 type 정보를 같이 저장합니다.
+        payload = {
             "vocab_size": self.vocab_size,
-            "id_to_token": vocab,
+            "id_to_token": [
+                {"id": token_id, "token": serialize_token(token)}
+                for token_id, token in sorted(self.id_to_token.items())
+            ],
             "merges": [list(pair) for pair in self.merges],
         }
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def load(self, path: str | Path):
         """
         save()로 저장한 JSON 파일을 읽어 vocabulary와 merge rule을 복원합니다.
         """
         path = Path(path)
-        data = json.loads(path.read_text(encoding="utf-8"))
-        self.vocab_size = data.get("vocab_size", self.vocab_size)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self.vocab_size = payload.get("vocab_size", self.vocab_size)
         self.id_to_token = {}
         self.token_to_id = {}
-        self.merges = [tuple(pair) for pair in data["merges"]]
+        self.merges = [tuple(pair) for pair in payload["merges"]]
 
-        for item in data["id_to_token"]:
+        def deserialize_token(data):
+            if data["type"] == "bytes":
+                return bytes(data["value"])
+            if data["type"] == "tuple":
+                return tuple(data["value"])
+            return data["value"]
+
+        # 저장된 type 정보를 이용해 str/bytes/tuple 토큰을 원래 형태로 복원합니다.
+        for item in payload["id_to_token"]:
             token_id = int(item["id"])
-            token_type = item["type"]
-            value = item["value"]
-
-            if token_type == "str":
-                token = value
-            elif token_type == "bytes":
-                token = bytes(value)
-            elif token_type == "tuple":
-                token = tuple(value)
-            else:
-                raise ValueError(f"Unknown token type: {token_type}")
-
+            token = deserialize_token(item["token"])
             self.id_to_token[token_id] = token
             self.token_to_id[token] = token_id
 
@@ -177,18 +180,17 @@ class BPETokenizer:
         if not self.id_to_token:
             self._init_special_tokens()
 
-        ids = [BYTE_OFFSET + b for b in text.encode("utf-8")]
-
+        # 학습된 merge rule을 같은 순서로 적용해야 train 때 만든 토큰화를 재현할 수 있습니다.
+        ids = [BYTE_OFFSET + byte_value for byte_value in text.encode("utf-8")]
         for pair in self.merges:
-            merge_id = self.token_to_id.get(pair)
-            if merge_id is None:
+            new_id = self.token_to_id.get(pair)
+            if new_id is None:
                 continue
-
             merged = []
             i = 0
             while i < len(ids):
                 if i < len(ids) - 1 and (ids[i], ids[i + 1]) == pair:
-                    merged.append(merge_id)
+                    merged.append(new_id)
                     i += 2
                 else:
                     merged.append(ids[i])
@@ -196,7 +198,7 @@ class BPETokenizer:
             ids = merged
 
         if add_bos_eos:
-            ids = [self.get_bos_id()] + ids + [self.get_eos_id()]
+            return [self.get_bos_id(), *ids, self.get_eos_id()]
         return ids
 
     def decode(self, ids: list[int], skip_special: bool = True) -> str:
@@ -207,22 +209,22 @@ class BPETokenizer:
         - merge token은 원본 byte token까지 재귀적으로 펼칩니다.
         - byte를 하나씩 decode하지 말고, 마지막에 `bytes(...).decode("utf-8")`를 한 번만 호출합니다.
         """
-        if not self.id_to_token:
-            self._init_special_tokens()
+        byte_values = []
 
-        def expand(token_id: int) -> bytes:
+        # merge 토큰은 pair를 재귀적으로 펼쳐 원래 byte sequence로 되돌립니다.
+        def expand(token_id: int) -> None:
             token = self.id_to_token.get(token_id)
-            if token is None:
-                return UNK_TOKEN.encode("utf-8")
             if isinstance(token, bytes):
-                return token
-            if isinstance(token, tuple):
-                return b"".join(expand(part_id) for part_id in token)
-            if isinstance(token, str):
-                if skip_special and token in SPECIAL_TOKENS:
-                    return b""
-                return token.encode("utf-8")
-            raise TypeError(f"Unsupported token type: {type(token)!r}")
+                byte_values.extend(token)
+            elif isinstance(token, tuple):
+                for child_id in token:
+                    expand(child_id)
+            elif token in SPECIAL_TOKENS:
+                if not skip_special:
+                    byte_values.extend(token.encode("utf-8"))
+            elif token is not None:
+                byte_values.extend(str(token).encode("utf-8"))
 
-        byte_sequence = b"".join(expand(token_id) for token_id in ids)
-        return byte_sequence.decode("utf-8", errors="replace")
+        for token_id in ids:
+            expand(token_id)
+        return bytes(byte_values).decode("utf-8", errors="replace")
