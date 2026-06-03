@@ -1,12 +1,9 @@
 # -*- coding: utf-8 -*-
 """Multi-Head Self-Attention 과제 템플릿."""
 
-from __future__ import annotations
-
-import math
-
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class MultiHeadAttention(nn.Module):
@@ -34,10 +31,11 @@ class MultiHeadAttention(nn.Module):
         self.d_model = d_model
         self.n_heads = n_heads
         self.head_dim = d_model // n_heads
-        self.qkv_proj = nn.Linear(d_model, 3 * d_model, bias=qkv_bias)
+        self.q_proj = nn.Linear(d_model, d_model, bias=qkv_bias)
+        self.k_proj = nn.Linear(d_model, d_model, bias=qkv_bias)
+        self.v_proj = nn.Linear(d_model, d_model, bias=qkv_bias)
         self.out_proj = nn.Linear(d_model, d_model)
-        self.attn_dropout = nn.Dropout(drop_rate)
-        self.resid_dropout = nn.Dropout(drop_rate)
+        self.dropout = nn.Dropout(drop_rate)
 
     def forward(
         self,
@@ -53,28 +51,37 @@ class MultiHeadAttention(nn.Module):
             causal_mask: True이면 미래 위치를 볼 수 없게 mask 처리
             return_attention_weights: True이면 attention weight도 함께 반환
         """
-        batch_size, seq_len, _ = x.shape
+        batch_size, seq_len, d_model = x.shape
+        if d_model != self.d_model:
+            raise ValueError("input last dimension must match d_model")
 
-        qkv = self.qkv_proj(x)
-        qkv = qkv.view(batch_size, seq_len, 3, self.n_heads, self.head_dim)
-        qkv = qkv.permute(2, 0, 3, 1, 4)
-        queries, keys, values = qkv[0], qkv[1], qkv[2]
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
 
-        scores = queries @ keys.transpose(-2, -1)
-        scores = scores / math.sqrt(self.head_dim)
+        q = q.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+
+        attn_scores = q @ k.transpose(-2, -1)
+        attn_scores = attn_scores / (self.head_dim ** 0.5)
+
         if causal_mask:
             mask = torch.triu(
-                torch.ones(seq_len, seq_len, device=x.device, dtype=torch.bool),
+                torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device),
                 diagonal=1,
             )
-            scores = scores.masked_fill(mask, float("-inf"))
+            attn_scores = attn_scores.masked_fill(mask, float("-inf"))
 
-        attn_weights = torch.softmax(scores, dim=-1)
-        dropped_weights = self.attn_dropout(attn_weights)
-        context = dropped_weights @ values
-        context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
-        out = self.resid_dropout(self.out_proj(context))
+        attn_weights = F.softmax(attn_scores, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+
+        context = attn_weights @ v
+        context = context.transpose(1, 2).contiguous().view(
+            batch_size, seq_len, self.d_model
+        )
+        output = self.out_proj(context)
 
         if return_attention_weights:
-            return out, attn_weights
-        return out
+            return output, attn_weights
+        return output

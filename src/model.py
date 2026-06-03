@@ -1,10 +1,6 @@
 # -*- coding: utf-8 -*-
 """GPT 모델 구성 요소 과제 템플릿."""
 
-from __future__ import annotations
-
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,8 +25,8 @@ class LayerNorm(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """마지막 차원의 평균과 분산으로 정규화한 뒤 gamma/beta를 적용합니다."""
         mean = x.mean(dim=-1, keepdim=True)
-        variance = x.var(dim=-1, keepdim=True, unbiased=False)
-        x_norm = (x - mean) / torch.sqrt(variance + self.eps)
+        var = x.var(dim=-1, keepdim=True, unbiased=False)
+        x_norm = (x - mean) / torch.sqrt(var + self.eps)
         return self.gamma * x_norm + self.beta
 
 
@@ -39,7 +35,9 @@ class GELU(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """tanh 근사식으로 GELU를 구현합니다."""
-        return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * x.pow(3))))
+        return 0.5 * x * (
+            1.0 + torch.tanh(0.7978845608028654 * (x + 0.044715 * x.pow(3)))
+        )
 
 
 class FeedForward(nn.Module):
@@ -47,10 +45,11 @@ class FeedForward(nn.Module):
 
     def __init__(self, d_model: int, dropout: float = 0.1, mult: int = 4):
         super().__init__()
+        hidden_dim = mult * d_model
         self.net = nn.Sequential(
-            nn.Linear(d_model, mult * d_model),
+            nn.Linear(d_model, hidden_dim),
             GELU(),
-            nn.Linear(mult * d_model, d_model),
+            nn.Linear(hidden_dim, d_model),
             nn.Dropout(dropout),
         )
 
@@ -73,7 +72,12 @@ class TransformerBlock(nn.Module):
         qkv_bias: bool = False,
     ):
         super().__init__()
-        self.attn = MultiHeadAttention(d_model, n_heads, drop_rate=drop_rate, qkv_bias=qkv_bias)
+        self.attention = MultiHeadAttention(
+            d_model=d_model,
+            n_heads=n_heads,
+            drop_rate=drop_rate,
+            qkv_bias=qkv_bias,
+        )
         self.ffn = FeedForward(d_model, dropout=drop_rate)
         self.norm1 = LayerNorm(d_model)
         self.norm2 = LayerNorm(d_model)
@@ -81,11 +85,10 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, causal_mask: bool = True) -> torch.Tensor:
         """attention과 ffn을 residual connection으로 연결합니다."""
-        attn_out = self.attn(self.norm1(x), causal_mask=causal_mask)
-        if isinstance(attn_out, tuple):
-            attn_out = attn_out[0]
+        attn_out = self.attention(self.norm1(x), causal_mask=causal_mask)
         x = x + self.dropout(attn_out)
-        x = x + self.ffn(self.norm2(x))
+        ffn_out = self.ffn(self.norm2(x))
+        x = x + self.dropout(ffn_out)
         return x
 
 
@@ -115,13 +118,6 @@ class GPTModel(nn.Module):
         self.final_norm = LayerNorm(config["emb_dim"])
         self.lm_head = nn.Linear(config["emb_dim"], config["vocab_size"], bias=False)
 
-    def forward_hidden(self, idx: torch.Tensor) -> torch.Tensor:
-        """토큰 ID에서 LM head 직전 hidden state를 계산합니다."""
-        x = self.embedding(idx)
-        for block in self.blocks:
-            x = block(x, causal_mask=True)
-        return self.final_norm(x)
-
     def forward(
         self,
         idx: torch.Tensor,
@@ -134,8 +130,12 @@ class GPTModel(nn.Module):
             targets가 None이면 logits
             targets가 있으면 (loss, logits)
         """
-        hidden = self.forward_hidden(idx)
-        logits = self.lm_head(hidden)
+        x = self.embedding(idx)
+        for block in self.blocks:
+            x = block(x, causal_mask=True)
+        x = self.final_norm(x)
+        logits = self.lm_head(x)
+
         if targets is None:
             return logits
 
@@ -159,9 +159,8 @@ def generate_text_simple(
         for _ in range(max_new_tokens):
             idx_cond = idx[:, -context_size:]
             logits = model(idx_cond)
-            if isinstance(logits, tuple):
-                logits = logits[-1]
-            next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+            next_token_logits = logits[:, -1, :]
+            next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
             idx = torch.cat((idx, next_token), dim=1)
     if was_training:
         model.train()
