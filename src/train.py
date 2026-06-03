@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """GPT 사전 학습 유틸리티 과제 템플릿."""
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
