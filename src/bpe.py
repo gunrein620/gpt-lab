@@ -33,7 +33,7 @@ class BPETokenizer:
     - 260 이상: BPE merge로 생성한 토큰
     """
 
-    def __init__(self, vocab_size: int = 3000):
+    def __init__(self, vocab_size: int = 4096):
         self.vocab_size = vocab_size
         self.id_to_token = {}
         self.token_to_id = {}
