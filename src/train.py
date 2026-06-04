@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """GPT 사전 학습 유틸리티 과제 템플릿."""
 
 from pathlib import Path
@@ -19,8 +18,7 @@ def calc_loss_batch(
     model: GPTModel,
     device: torch.device,
 ) -> torch.Tensor:
-    """TODO: 한 배치를 device로 옮긴 뒤 다음 토큰 예측 cross entropy loss를 계산합니다."""
-    # 한 배치를 장치로 옮기고 GPTModel.forward가 반환하는 next-token loss를 사용합니다.
+    """한 배치를 device로 옮긴 뒤 다음 토큰 예측 cross entropy loss를 계산합니다."""
     input_batch = input_batch.to(device)
     target_batch = target_batch.to(device)
     loss, _ = model(input_batch, targets=target_batch)
@@ -33,13 +31,12 @@ def calc_loss_loader(
     device: torch.device,
     num_batches: int | None = None,
 ) -> float:
-    """TODO: data_loader의 평균 loss를 계산합니다. 검증에서는 torch.no_grad()를 사용하세요."""
+    """data_loader의 평균 loss를 계산합니다. 검증에서는 torch.no_grad()를 사용하세요."""
     model.eval()
     total_loss = 0.0
     count = 0
     if num_batches is None:
         num_batches = len(data_loader)
-    # 평가 중에는 gradient가 필요 없으므로 no_grad로 메모리와 계산을 줄입니다.
     with torch.no_grad():
         for batch_idx, (input_batch, target_batch) in enumerate(data_loader):
             if batch_idx >= num_batches:
@@ -57,8 +54,7 @@ def save_checkpoint(
     global_step: int,
     path: str,
 ) -> None:
-    """TODO: model/optimizer 상태, epoch, global_step을 torch.save로 저장합니다."""
-    # 재시작 가능한 학습을 위해 모델, optimizer, epoch, step을 함께 저장합니다.
+    """model/optimizer 상태, epoch, global_step을 torch.save로 저장합니다."""
     torch.save(
         {
             "model_state_dict": model.state_dict(),
@@ -76,8 +72,7 @@ def load_checkpoint(
     path: str,
     device: torch.device,
 ) -> tuple[int, int]:
-    """TODO: torch.load로 checkpoint를 읽어 model/optimizer 상태를 복원합니다."""
-    # 저장된 상태를 같은 장치 기준으로 읽고 모델/optimizer에 다시 주입합니다.
+    """torch.load로 checkpoint를 읽어 model/optimizer 상태를 복원합니다."""
     checkpoint = torch.load(path, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
     if optimizer is not None and "optimizer_state_dict" in checkpoint:
@@ -94,16 +89,14 @@ def generate(
     top_k: int | None = None,
     eos_id: int | None = None,
 ) -> torch.Tensor:
-    """TODO: temperature와 top-k 샘플링을 지원하는 생성 함수를 구현합니다."""
+    """temperature와 top-k 샘플링을 지원하는 생성 함수를 구현합니다."""
     model.eval()
     with torch.no_grad():
         for _ in range(max_new_tokens):
-            # 긴 문맥은 context_size만큼 잘라 모델의 최대 길이를 넘지 않게 합니다.
             idx_cond = idx[:, -context_size:]
             logits = model(idx_cond)[:, -1, :]
             if top_k is not None:
                 top_k = min(top_k, logits.size(-1))
-                # top-k 밖의 후보를 제거해 낮은 확률 토큰이 샘플링되는 것을 제한합니다.
                 top_values, _ = torch.topk(logits, top_k)
                 cutoff = top_values[:, [-1]]
                 logits = logits.masked_fill(logits < cutoff, float("-inf"))
@@ -111,7 +104,6 @@ def generate(
             if temperature <= 0:
                 next_id = torch.argmax(logits, dim=-1, keepdim=True)
             else:
-                # temperature로 분포의 날카로움을 조절한 뒤 확률적으로 다음 토큰을 뽑습니다.
                 probs = F.softmax(logits / temperature, dim=-1)
                 next_id = torch.multinomial(probs, num_samples=1)
 
@@ -131,9 +123,8 @@ def generate_and_print_sample(
     temperature: float = 0.8,
     top_k: int | None = 40,
 ) -> None:
-    """TODO: start_context를 encode하고 generate 후 decode하여 출력합니다."""
+    """start_context를 encode하고 generate 후 decode하여 출력합니다."""
     model.eval()
-    # 텍스트 prompt를 token id로 바꾼 뒤 생성 결과를 다시 문자열로 복원합니다.
     ids = tokenizer.encode(start_context, add_bos_eos=False)
     idx = torch.tensor(ids, dtype=torch.long, device=device).unsqueeze(0)
     out = generate(model, idx, max_new_tokens, context_size, temperature, top_k)
@@ -155,7 +146,7 @@ def train_model(
     start_epoch: int = 0,
     global_step: int = 0,
 ) -> list[float]:
-    """TODO: 사전 학습 루프를 구현하고 epoch별 train loss 리스트를 반환합니다."""
+    """사전 학습 루프를 구현하고 epoch별 train loss 리스트를 반환합니다."""
     model.to(device)
     train_losses = []
     for epoch in range(start_epoch, start_epoch + num_epochs):
@@ -163,7 +154,6 @@ def train_model(
         running_loss = 0.0
         batch_count = 0
         for input_batch, target_batch in train_loader:
-            # forward -> loss -> backward -> optimizer.step 순서가 기본 학습 루프입니다.
             optimizer.zero_grad()
             loss = calc_loss_batch(input_batch, target_batch, model, device)
             loss.backward()

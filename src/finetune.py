@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """NSMC 감성 분류 미세 조정 과제 템플릿."""
 
 import json
@@ -32,7 +31,6 @@ def make_sentiment_dataset(
     반환 형식:
         [{"text": "리뷰", "label": 0 또는 1}, ...]
     """
-    # NSMC TSV에서 빈 리뷰를 제거하고 감성 분류에 필요한 text/label만 남깁니다.
     def read_nsmc(path: str | Path) -> list[dict]:
         rows = []
         with Path(path).open("r", encoding="utf-8", newline="") as f:
@@ -46,7 +44,6 @@ def make_sentiment_dataset(
         return rows
 
     train_rows = read_nsmc(train_tsv_path)
-    # seed를 고정해 train/validation split이 매번 같은 결과가 되게 합니다.
     rng = random.Random(seed)
     rng.shuffle(train_rows)
 
@@ -91,8 +88,7 @@ class ReviewSentimentDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
-        """TODO: text를 encode하고 max_length까지 자르거나 padding한 뒤 label과 함께 반환합니다."""
-        # 리뷰를 token id로 바꾸고 고정 길이 batch를 만들 수 있게 padding/truncation 합니다.
+        """text를 encode하고 max_length까지 자르거나 padding한 뒤 label과 함께 반환합니다."""
         item = self.data[idx]
         ids = self.tokenizer.encode(item["text"], add_bos_eos=True)
         ids = ids[: self.max_length]
@@ -117,7 +113,6 @@ class GPTForSequenceClassification(nn.Module):
         super().__init__()
         self.gpt = gpt_model
         self.num_labels = num_labels
-        # TODO: dropout과 classifier를 정의하세요. classifier 입력 차원은 gpt_model.config["emb_dim"]입니다.
         self.dropout = nn.Dropout(drop_rate)
         self.classifier = nn.Linear(gpt_model.config["emb_dim"], num_labels)
 
@@ -131,7 +126,6 @@ class GPTForSequenceClassification(nn.Module):
 
         labels가 있으면 (loss, logits), 없으면 logits를 반환합니다.
         """
-        # LM head 대신 GPT hidden state의 마지막 위치를 문장 대표 벡터로 사용해 분류합니다.
         x = self.gpt.embedding(input_ids)
         for block in self.gpt.blocks:
             x = block(x, causal_mask=True)
@@ -150,7 +144,7 @@ def train_epoch_sentiment(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
 ) -> tuple[float, float]:
-    """TODO: 감성 분류 모델을 1 epoch 훈련하고 (평균 loss, accuracy)를 반환합니다."""
+    """감성 분류 모델을 1 epoch 훈련하고 (평균 loss, accuracy)를 반환합니다."""
     model.train()
     total_loss = 0.0
     correct = 0
@@ -158,7 +152,6 @@ def train_epoch_sentiment(
     for input_ids, labels in train_loader:
         input_ids = input_ids.to(device)
         labels = labels.to(device)
-        # 분류 loss를 기준으로 classifier와 GPT backbone 파라미터를 업데이트합니다.
         optimizer.zero_grad()
         loss, logits = model(input_ids, labels=labels)
         loss.backward()
@@ -175,7 +168,7 @@ def evaluate_sentiment(
     data_loader,
     device: torch.device,
 ) -> tuple[float, float]:
-    """TODO: 감성 분류 모델을 평가하고 (평균 loss, accuracy)를 반환합니다."""
+    """감성 분류 모델을 평가하고 (평균 loss, accuracy)를 반환합니다."""
     model.eval()
     total_loss = 0.0
     correct = 0

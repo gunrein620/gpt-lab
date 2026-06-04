@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """토큰 임베딩 + 위치 임베딩 과제 템플릿."""
 
 import torch
@@ -26,7 +25,6 @@ class InputEmbedding(nn.Module):
         super().__init__()
         self.emb_dim = emb_dim
         self.context_length = context_length
-        # TODO: token_embedding, position_embedding, dropout을 정의하세요.
         self.token_embedding = nn.Embedding(vocab_size, emb_dim)
         self.position_embedding = nn.Embedding(context_length, emb_dim)
         self.dropout = nn.Dropout(drop_rate)
@@ -44,7 +42,6 @@ class InputEmbedding(nn.Module):
         batch_size, seq_len = x.shape
         if seq_len > self.context_length:
             raise ValueError("seq_len must not exceed context_length")
-        # 토큰 의미 벡터에 위치 벡터를 더해 Transformer가 순서 정보를 볼 수 있게 합니다.
         positions = torch.arange(seq_len, device=x.device)
         tok_emb = self.token_embedding(x)
         pos_emb = self.position_embedding(positions).unsqueeze(0)

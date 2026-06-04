@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 데이터셋·데이터 로더·입력 임베딩 단위 테스트.
 실행: `pytest tests/test_dataset.py -v`
@@ -13,9 +12,6 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-# =============================================================================
-# GPTDataset
-# =============================================================================
 
 
 class TestGPTDataset:
@@ -34,7 +30,6 @@ class TestGPTDataset:
             pytest.fail("GPTDataset._length 미구현")
         if len(ds) == 0:
             pytest.fail("GPTDataset._length 미구현")
-        # input 길이 10과 target 길이 10을 만들려면 마지막 다음 토큰 1개가 더 필요하다.
         expected = (100 - 10 - 1) // 5 + 1
         assert len(ds) == expected
 
@@ -52,13 +47,9 @@ class TestGPTDataset:
         assert inp.shape == (context_length,)
         assert tgt.shape == (context_length,)
         assert inp.dtype == torch.long
-        # target은 input을 한 칸 시프트한 다음 토큰
         torch.testing.assert_close(tgt[:-1], inp[1:])
 
 
-# =============================================================================
-# create_dataloader
-# =============================================================================
 
 
 class TestCreateDataloader:
@@ -85,9 +76,6 @@ class TestCreateDataloader:
         assert tgt.shape == (batch_size, context_length)
 
 
-# =============================================================================
-# InputEmbedding
-# =============================================================================
 
 
 class TestInputEmbedding:

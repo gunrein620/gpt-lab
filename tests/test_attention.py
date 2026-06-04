@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 MultiHeadAttention 단위 테스트.
 실행: `pytest tests/test_attention.py -v`
@@ -13,9 +12,6 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-# =============================================================================
-# MultiHeadAttention
-# =============================================================================
 
 
 class TestMultiHeadAttention:
@@ -49,7 +45,6 @@ class TestMultiHeadAttention:
             out, attn_weights = mha(x, causal_mask=True, return_attention_weights=True)
         except (NotImplementedError, TypeError):
             pytest.fail("MultiHeadAttention + return_attention_weights 미구현")
-        # attn_weights: (B, n_heads, T, T). 상삼각(diagonal 제외)이 0이어야 함
         assert attn_weights.shape == (batch_size, n_heads, seq_len, seq_len)
         for i in range(seq_len):
             for j in range(i + 1, seq_len):

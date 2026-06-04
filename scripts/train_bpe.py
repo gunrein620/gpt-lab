@@ -14,7 +14,7 @@ DEFAULT_VOCAB_PATH = DATA_DIR / "nsmc_bpe_vocab_4096.json"
 
 sys.path.insert(0, str(SRC_DIR))
 
-from bpe import BPETokenizer  # noqa: E402
+from bpe import BPETokenizer
 
 
 def parse_args() -> argparse.Namespace:
