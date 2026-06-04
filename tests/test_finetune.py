@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 감성 분류 미세 조정 단위 테스트.
 실행: `pytest tests/test_finetune.py -v`

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """토큰 임베딩 + 위치 임베딩 과제 템플릿."""
 
 import torch
@@ -26,12 +25,13 @@ class InputEmbedding(nn.Module):
         super().__init__()
         self.emb_dim = emb_dim
         self.context_length = context_length
-        # TODO: token_embedding, position_embedding, dropout을 정의하세요.
-        raise NotImplementedError("InputEmbedding.__init__을 구현하세요.")
+        self.token_embedding = nn.Embedding(vocab_size, emb_dim)
+        self.position_embedding = nn.Embedding(context_length, emb_dim)
+        self.dropout = nn.Dropout(drop_rate)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        TODO: token embedding과 position embedding을 더한 뒤 dropout을 적용합니다.
+        token embedding과 position embedding을 더한 뒤 dropout을 적용합니다.
 
         Args:
             x: (batch_size, seq_len) token IDs
@@ -39,4 +39,10 @@ class InputEmbedding(nn.Module):
         Returns:
             (batch_size, seq_len, emb_dim)
         """
-        raise NotImplementedError("InputEmbedding.forward를 구현하세요.")
+        batch_size, seq_len = x.shape
+        if seq_len > self.context_length:
+            raise ValueError("seq_len must not exceed context_length")
+        positions = torch.arange(seq_len, device=x.device)
+        tok_emb = self.token_embedding(x)
+        pos_emb = self.position_embedding(positions).unsqueeze(0)
+        return self.dropout(tok_emb + pos_emb)

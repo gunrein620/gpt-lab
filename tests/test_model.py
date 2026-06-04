@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 GPT 모델 단위 테스트 (LayerNorm, GELU, FeedForward, TransformerBlock, GPTModel, generate_text_simple).
 실행: `pytest tests/test_model.py -v`
@@ -13,7 +12,6 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-# 테스트용 작은 설정
 GPT_CONFIG_SMALL = {
     "vocab_size": 1000,
     "context_length": 64,
@@ -25,9 +23,6 @@ GPT_CONFIG_SMALL = {
 }
 
 
-# =============================================================================
-# LayerNorm
-# =============================================================================
 
 
 class TestLayerNorm:
@@ -46,9 +41,6 @@ class TestLayerNorm:
         assert out.shape == x.shape
 
 
-# =============================================================================
-# GELU
-# =============================================================================
 
 
 class TestGELU:
@@ -67,9 +59,6 @@ class TestGELU:
         assert out.shape == x.shape
 
 
-# =============================================================================
-# FeedForward
-# =============================================================================
 
 
 class TestFeedForward:
@@ -89,9 +78,6 @@ class TestFeedForward:
         assert out.shape == (2, 10, d_model)
 
 
-# =============================================================================
-# TransformerBlock
-# =============================================================================
 
 
 class TestTransformerBlock:
@@ -111,9 +97,6 @@ class TestTransformerBlock:
         assert out.shape == (2, 8, d_model)
 
 
-# =============================================================================
-# GPTModel
-# =============================================================================
 
 
 class TestGPTModel:
@@ -152,9 +135,6 @@ class TestGPTModel:
         assert loss.item() >= 0
 
 
-# =============================================================================
-# generate_text_simple
-# =============================================================================
 
 
 class TestGenerateTextSimple:

@@ -4,7 +4,7 @@
 
 이 프로젝트는 PyTorch만 사용해 작은 GPT 계열 언어 모델을 직접 구현하는 학생용 템플릿입니다. 완성할 모델은 거대한 ChatGPT가 아니라, LLM의 핵심 component를 이해하기 위한 교육용 mini GPT입니다.
 
-학생용 소스는 `TODO`와 `NotImplementedError`가 남아 있는 상태입니다. 처음 테스트를 실행하면 실패하는 것이 정상이며, 각 단계의 TODO를 구현하면서 해당 테스트 파일을 하나씩 통과시키면 됩니다.
+학생용 소스는 `implementation item`와 `NotImplementedError`가 남아 있는 상태입니다. 처음 테스트를 실행하면 실패하는 것이 정상이며, 각 단계의 implementation item를 구현하면서 해당 테스트 파일을 하나씩 통과시키면 됩니다.
 
 참고 도서:
 
@@ -160,7 +160,7 @@ python download_data.py
 ### 6.1 구현 전 확인 사항
 
 - 작은 데이터로 먼저 실행해서 코드가 동작하는지 확인합니다.
-- 각 단계의 TODO를 구현한 뒤 해당 테스트 파일만 먼저 실행합니다.
+- 각 단계의 implementation item를 구현한 뒤 해당 테스트 파일만 먼저 실행합니다.
 - 단계별 테스트를 모두 통과한 뒤 마지막에 전체 테스트를 실행합니다.
 - Colab 런타임이 끊길 수 있으므로 오래 걸리는 학습 결과와 checkpoint는 저장합니다.
 - 데이터 파일, checkpoint, token, 비밀번호는 GitHub에 commit하지 않습니다.
@@ -171,12 +171,12 @@ python download_data.py
 
 1. 환경설정 셀 실행
 2. 데이터 준비 셀 실행
-3. `src/bpe.py` TODO 구현
+3. `src/bpe.py` implementation item 구현
 4. `pytest tests/test_bpe.py -v` 셀 실행
 5. 통과하면 다음 단계로 이동
 6. 마지막에 `pytest tests/ -v` 실행
 
-노트북에서 어떤 셀이 `NotImplementedError`를 출력하면 아직 해당 단계 TODO가 남아 있다는 뜻입니다.
+노트북에서 어떤 셀이 `NotImplementedError`를 출력하면 아직 해당 단계 implementation item가 남아 있다는 뜻입니다.
 
 ### 6.3 개발 순서 요약
 

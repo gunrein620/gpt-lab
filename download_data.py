@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 NSMC 데이터를 data/ 폴더에 다운로드하고 과제용 파일을 생성합니다.
 실행: 프로젝트 루트에서 `python download_data.py`

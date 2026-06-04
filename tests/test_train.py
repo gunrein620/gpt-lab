@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 사전 훈련 유틸 단위 테스트 (calc_loss_batch, calc_loss_loader, save/load_checkpoint, generate).
 실행: `pytest tests/test_train.py -v`
@@ -28,9 +27,6 @@ GPT_CONFIG_SMALL = {
 }
 
 
-# =============================================================================
-# calc_loss_batch
-# =============================================================================
 
 
 class TestCalcLossBatch:
@@ -54,9 +50,6 @@ class TestCalcLossBatch:
         assert loss.item() >= 0
 
 
-# =============================================================================
-# calc_loss_loader
-# =============================================================================
 
 
 class TestCalcLossLoader:
@@ -86,9 +79,6 @@ class TestCalcLossLoader:
         assert avg_loss >= 0
 
 
-# =============================================================================
-# save_checkpoint / load_checkpoint
-# =============================================================================
 
 
 class TestCheckpoint:
@@ -118,9 +108,6 @@ class TestCheckpoint:
         assert step == 10
 
 
-# =============================================================================
-# generate (temperature, top_k)
-# =============================================================================
 
 
 class TestGenerate:
@@ -143,9 +130,6 @@ class TestGenerate:
         assert out.shape == (1, 4 + 5)
 
 
-# =============================================================================
-# plot_losses (제공 함수)
-# =============================================================================
 
 
 class TestPlotLosses:
@@ -156,4 +140,3 @@ class TestPlotLosses:
         from train import plot_losses
 
         plot_losses([0.5, 0.4, 0.3], [0.6, 0.5, 0.4])
-        # 시각화만 하므로 예외 없으면 통과
